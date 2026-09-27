@@ -294,6 +294,8 @@ interface Immersion {
   input: { applyIntents(frame: ActionIntentFrame): void; detach(): void };
   offIntents: () => void;
   offLeaseAbort: () => void;
+  /** Stops stepping held keys, sticks and a glide. */
+  stopLook: () => void;
   session: string;
 }
 
@@ -752,13 +754,34 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       scheduleLookHistory();
       emit();
     });
+    // Held keys and sticks, and a drag's glide, step the view every frame, holding rendering, until they stop.
+    let releaseLook: (() => void) | null = null;
+    let lookSteppedMs = 0;
+    const stopLook = (): void => {
+      frameCallbacks.delete(stepLook);
+      releaseLook?.();
+      releaseLook = null;
+    };
+    function stepLook(): void {
+      const at = now();
+      const moving = look.step(at - lookSteppedMs);
+      lookSteppedMs = at;
+      if (!moving) stopLook();
+    }
+    const requestFrame = (): void => {
+      runtime.requestRender();
+      if (releaseLook || !look.moving() || lease.released) return;
+      lookSteppedMs = now();
+      frameCallbacks.add(stepLook);
+      releaseLook = lease.holdRendering();
+    };
     // The handoff view is kept exactly: the look model's clamps apply from the first user look.
     const input = canvas
       ? attachLookInput({
         canvas, model: look,
         onExit: () => { void handle_.exit(); },
         onUserInput: () => cancelArrival(),
-        requestFrame: () => runtime.requestRender(),
+        requestFrame,
         inputMode: () => runtime.getInputMode?.() ?? "auto",
         safariGestures: isSafariGestureSupported(),
       })
@@ -771,7 +794,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     lease.signal.addEventListener("abort", onLeaseAbort, { once: true });
     const state: Immersion = {
       lease, id: entry.record.id, shown: { handle, entry }, detail, refine: null, look, roll: view.rollDeg, input, offIntents,
-      offLeaseAbort: () => lease.signal.removeEventListener("abort", onLeaseAbort), session,
+      offLeaseAbort: () => lease.signal.removeEventListener("abort", onLeaseAbort), stopLook, session,
     };
     self.state = state;
     return state;
@@ -888,6 +911,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     arrival = null;
     state.refine?.abort();
     state.input.detach();
+    state.stopLook();
     state.offIntents();
     state.offLeaseAbort();
     renderer.immersion.show(null);

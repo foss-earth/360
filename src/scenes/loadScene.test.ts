@@ -19,7 +19,7 @@ const MANIFEST_URL = "https://foss-earth.test/examples/panorama-scenes/campus-pa
 const PUBLIC = path.join(process.cwd(), "public");
 const manifest = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-scenes/campus-pair.scene.json"), "utf8")) as Record<string, unknown>;
 
-function harness(options: { available?: boolean; groundReady?: boolean } = {}) {
+function harness(options: { available?: boolean; groundReady?: boolean; canvas?: HTMLCanvasElement } = {}) {
   let clock = 0;
   const frameCallbacks = new Set<() => void>();
   const tick = (ms = 16) => { clock += ms; for (const callback of [...frameCallbacks]) callback(); };
@@ -64,6 +64,8 @@ function harness(options: { available?: boolean; groundReady?: boolean } = {}) {
     onDeviceLost: listener => { deviceLost.add(listener); return () => deviceLost.delete(listener); },
     onDeviceRestored: () => () => {},
     prepareTerrain: async () => ({ groundHeightMeters: GROUND, altitudeMeters: GROUND }),
+    // Only a canvas for the look input, when a test asks for one.
+    ...(options.canvas ? { scene: { getEngine: () => ({ getRenderingCanvas: () => options.canvas, getHardwareScalingLevel: () => 1, getCaps: () => ({ maxTextureSize: 8192 }) }) } as never } : {}),
   };
 
   // The camera: 100 m south of the pair's photograph at its height, looking north.
@@ -245,6 +247,58 @@ describe("loadScene", () => {
     handle.hover("pair-grid");
     expect(handle.status.hovered).toBeNull();
     expect(h.continuous()).toBe(0);
+  });
+
+  it("turns the view every frame while an arrow key is held, and glides after a flick, holding rendering only meanwhile", async () => {
+    const canvas = document.createElement("canvas");
+    Object.assign(canvas, { setPointerCapture: () => {}, releasePointerCapture: () => {} });
+    document.body.append(canvas);
+    const h = harness({ canvas });
+    const handle = await loaded(h);
+    handles.push(handle);
+    const entering = handle.enter("pair-photo");
+    await settle(h, 40);
+    await entering;
+    await settle(h, 20);
+    const heading = () => handle.status.view!.headingDeg;
+    const start = heading();
+    expect(h.continuous()).toBe(0);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+    h.tick(100);
+    h.tick(100);
+    // scene.panorama.lookRate: 90°/s.
+    expect(heading() - start).toBeCloseTo(18, 6);
+    window.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowRight" }));
+    h.tick(100);
+    expect(heading() - start).toBeCloseTo(18, 6);
+    expect(h.continuous()).toBe(0);
+
+    // A flick: nothing glides while the pointer holds the image, and it glides on after the release.
+    const pointer = (type: string, x: number, timeStamp: number) => {
+      const event = new PointerEvent(type, { pointerId: 1, pointerType: "mouse", button: 0, clientX: x, clientY: 300, bubbles: true, cancelable: true });
+      Object.defineProperty(event, "timeStamp", { value: timeStamp });
+      canvas.dispatchEvent(event);
+    };
+    pointer("pointerdown", 400, 1000);
+    pointer("pointermove", 380, 1010);
+    const held = heading();
+    h.tick(16);
+    expect(heading()).toBe(held);
+    pointer("pointerup", 380, 1015);
+    h.tick(16);
+    expect(heading()).toBeGreaterThan(held);
+    await settle(h, 80);
+    expect(h.continuous()).toBe(0);
+
+    // Held still before the release: no glide.
+    const before = heading();
+    pointer("pointerdown", 400, 5000);
+    pointer("pointermove", 380, 5010);
+    pointer("pointerup", 380, 5200);
+    h.tick(16);
+    expect(heading()).toBeCloseTo(before + 3, 9);
+    canvas.remove();
   });
 
   it("follows a link, keeps the original overview, and Back from B returns to A", async () => {

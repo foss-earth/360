@@ -43,6 +43,8 @@ export interface LookSettings {
 
 /** Below this angular speed, deg/s, inertia has stopped. */
 const INERTIA_STOP_DEG_PER_S = 0.05;
+/** A drag held still this long, ms, before its release has no glide. */
+const GLIDE_RELEASE_WINDOW_MS = 80;
 /** Pixels in a wheel "line" and a "page", to measure notches alike. */
 const WHEEL_LINE_PX = 16;
 const WHEEL_NOTCH_PX = 100;
@@ -65,9 +67,10 @@ export function zoomFov(fovDeg: number, amount: number): number {
 export interface LookModel {
   get(): LookState;
   set(state: LookState): void;
-  /** A drag of the image by (dx, dy) CSS px over `dtMs`. */
+  /** A drag of the image by (dx, dy) CSS px over `dtMs`. Its speed glides on only after the release. */
   drag(dx: number, dy: number, dtMs: number): void;
-  release(): void;
+  /** The drag ends, `stillMs` after its last move: a drag held still before the release has no glide. */
+  release(stillMs?: number): void;
   /** Wheel deltaY in CSS px; negative (wheel up) narrows. */
   wheel(deltaPx: number): void;
   /** A trackpad swipe's scroll deltas, CSS px: it moves the image as a drag the other way does. */
@@ -88,6 +91,8 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
   let state = clampLook(initial, settings());
   let velocity = { heading: 0, pitch: 0 };
   let rates = { lookX: 0, lookY: 0, zoom: 0 };
+  // While a drag holds the image, its speed is kept for the release, not applied.
+  let held = false;
   const apply = (next: LookState): void => {
     state = clampLook(next, settings());
     onChange(state);
@@ -102,12 +107,14 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
       const gain = settings().dragSensitivity;
       const heading = -dx * gain;
       const pitch = dy * gain;
+      held = true;
       if (dtMs > 0) velocity = { heading: (heading / dtMs) * 1000, pitch: (pitch / dtMs) * 1000 };
       apply({ ...state, headingDeg: state.headingDeg + heading, pitchDeg: state.pitchDeg + pitch });
     },
-    release() {
+    release(stillMs = 0) {
+      held = false;
       const current = settings();
-      if (current.reducedMotion || current.inertiaHalfLifeMs <= 0) velocity = { heading: 0, pitch: 0 };
+      if (current.reducedMotion || current.inertiaHalfLifeMs <= 0 || stillMs > GLIDE_RELEASE_WINDOW_MS) velocity = { heading: 0, pitch: 0 };
     },
     wheel(deltaPx) {
       apply({ ...state, verticalFovDeg: zoomFov(state.verticalFovDeg, (-deltaPx / WHEEL_NOTCH_PX) * settings().zoomPerNotch) });
@@ -141,7 +148,7 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
           verticalFovDeg: zoomFov(next.verticalFovDeg, rates.zoom * current.zoomRate * dt),
         };
       }
-      if (velocity.heading || velocity.pitch) {
+      if (!held && (velocity.heading || velocity.pitch)) {
         if (current.reducedMotion || current.inertiaHalfLifeMs <= 0) {
           velocity = { heading: 0, pitch: 0 };
         } else {
@@ -154,7 +161,7 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
       if (next !== state) apply(next);
       return this.moving();
     },
-    moving: () => Boolean(rates.lookX || rates.lookY || rates.zoom || velocity.heading || velocity.pitch),
+    moving: () => Boolean(rates.lookX || rates.lookY || rates.zoom || (!held && (velocity.heading || velocity.pitch))),
     cancelInertia() {
       velocity = { heading: 0, pitch: 0 };
     },
@@ -175,7 +182,7 @@ export interface LookInputOptions {
   onExit(): void;
   /** Any look input: cancels an entry's expansion or an arrival's levelling. */
   onUserInput(): void;
-  /** Something moved: a frame is needed. */
+  /** Something moved: a frame is needed, and while the model is `moving()`, its `step` on every frame. */
   requestFrame(): void;
   /** Whether a binding is being captured, which keeps input. */
   capturing?: () => boolean;
@@ -238,10 +245,11 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     options.requestFrame();
   };
   const onPointerUp = (event: PointerEvent): void => {
-    if (!pointers.delete(event.pointerId)) return;
+    const last = pointers.get(event.pointerId);
+    if (!last || !pointers.delete(event.pointerId)) return;
     pinchFrom = pointers.size === 2 ? separation() : null;
     if (pointers.size === 0) {
-      model.release();
+      model.release(event.timeStamp - last.at);
       if (model.moving()) options.requestFrame();
     }
   };

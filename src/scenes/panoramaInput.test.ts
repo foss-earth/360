@@ -53,6 +53,19 @@ describe("panorama look model", () => {
     expect(model.step(100)).toBe(false);
   });
 
+  it("keeps a drag's speed for its release, and drops it when the drag was held still first", () => {
+    const model = createLookModel({ headingDeg: 180, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
+    model.drag(-10, 0, 10);
+    expect(model.moving()).toBe(false);
+    expect(model.step(16)).toBe(false);
+    expect(model.get().headingDeg).toBeCloseTo(181.5);
+    model.release(200);
+    expect(model.moving()).toBe(false);
+    model.drag(-10, 0, 10);
+    model.release(10);
+    expect(model.moving()).toBe(true);
+  });
+
   it("continues a flick with a half-life, and not at all with reduced motion or a zero half-life", () => {
     const flick = (settings: LookSettings) => {
       const model = createLookModel({ headingDeg: 180, pitchDeg: 0, verticalFovDeg: 60 }, () => settings, () => {});
