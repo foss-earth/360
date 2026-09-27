@@ -10,6 +10,7 @@
  * draws nothing.
  */
 import {
+  Color4,
   Constants,
   Matrix,
   Mesh,
@@ -120,11 +121,14 @@ export interface OrbHit {
   onSilhouette: boolean;
 }
 
+export type PanoramaProbeOutput = "direction" | "ray";
+
 export interface PanoramaProbeResult {
   width: number;
   height: number;
-  /** RGBA float32 rows as read back. */
-  data: Float32Array;
+  /** Per output asked for, RGBA float32 rows as read back: xyz and coverage. */
+  outputs: Partial<Record<PanoramaProbeOutput, Float32Array>>;
+  /** The camera frame every output was drawn with: one frame for all. */
   frame: PanoramaCameraFrame;
 }
 
@@ -141,12 +145,18 @@ export interface PanoramaRenderer {
   pick(clientX: number, clientY: number, isOccluded: (eye: Vec3, direction: Vec3, distance: number) => boolean): OrbHit[];
   /** Where a world direction from the eye lands on the canvas, CSS px, or null behind the view. */
   project(direction: Vec3, frame?: PanoramaCameraFrame): { x: number; y: number } | null;
-  /** Test only: renders what `target` shows as float directions and reads it back. */
-  probe(target: { orb: string } | { immersion: true }, output: "direction" | "ray"): Promise<PanoramaProbeResult>;
+  /**
+   * Test only: renders what `target` shows as float vectors and reads them
+   * back, each output in its own render target within one rendered frame:
+   * the view ray each pixel drew with, and the image direction it sampled.
+   */
+  probe(target: { orb: string } | { immersion: true }, outputs: readonly PanoramaProbeOutput[]): Promise<PanoramaProbeResult>;
   /** Test only: draw with uniforms this many frames old (the negative control). */
   setUniformDelayFrames(frames: number): void;
   /** Test only: the last frames' camera and uniform revisions, to show no draw used a stale camera. */
   drawRecords(): readonly { frameId: number; target: string; cameraRevision: string; uniformRevision: string }[];
+  /** Test only: what an orb draws from, and its radius in `frame`, for a CPU reference to use the same inputs. */
+  inspectOrb(id: string, frame?: PanoramaCameraFrame): { marker: Vec3 | null; radiusMeters: number; effectiveRadius: number | null; content: Mat3; visible: boolean; textured: boolean } | null;
   dispose(): void;
 }
 
@@ -259,6 +269,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   function currentFrame(presentation = options.getPresentationView()): PanoramaCameraFrame | null {
     const camera: Camera | null = scene.activeCamera;
     if (!camera) return null;
+    // The eye is updated with the view matrix: bring both up to date before reading either.
+    const view = camera.getViewMatrix();
     const position = camera.globalPosition;
     const eye: Vec3 = [position.x, position.y, position.z];
     const aspect = engine.getAspectRatio(camera);
@@ -273,7 +285,6 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       verticalFovRad = presentation.verticalFovRad;
       projection = Matrix.PerspectiveFovRH(verticalFovRad, aspect, 0.1, 1000, engine.isNDCHalfZRange);
     } else {
-      const view = camera.getViewMatrix();
       rotation = rotationOnly(view);
       basis = basisFromViewMatrix(view);
       verticalFovRad = camera.fov;
@@ -292,18 +303,35 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     };
   }
 
-  // The frame used by every draw this rendered frame, and, for the negative
-  // control, the ones before it.
-  let frameCache: { id: number; frame: PanoramaCameraFrame | null } | null = null;
+  /** What the camera frame depends on, cheaply: the camera, its matrices' versions, the aspect and the canvas height. */
+  function cameraKey(): string {
+    const camera = scene.activeCamera;
+    if (!camera) return "";
+    return `${camera.uniqueId}:${camera.getViewMatrix().updateFlag}:${camera.getProjectionMatrix().updateFlag}:${engine.getAspectRatio(camera)}:${canvasCssHeight()}`;
+  }
+
+  // The frame every draw uses, and, for the negative control, one per earlier
+  // rendered frame. It is computed again whenever the camera or the presented
+  // view changed since, even within one rendered frame, so a draw never uses a
+  // camera from before a move.
+  let frameCache: { id: number; key: string; presentation: NavigationPresentation | null; frame: PanoramaCameraFrame | null } | null = null;
   const history: PanoramaCameraFrame[] = [];
+  let historyFrameId = -1;
   function drawFrame(): { current: PanoramaCameraFrame; uniforms: PanoramaCameraFrame } | null {
     const id = engine.frameId;
-    if (!frameCache || frameCache.id !== id) {
-      const frame = currentFrame();
-      frameCache = { id, frame };
+    const presentation = options.getPresentationView();
+    const key = cameraKey();
+    if (!frameCache || frameCache.id !== id || frameCache.key !== key || frameCache.presentation !== presentation) {
+      const frame = currentFrame(presentation);
+      frameCache = { id, key, presentation, frame };
       if (frame) {
-        history.unshift(frame);
-        history.length = Math.min(history.length, 8);
+        // A camera moved within a rendered frame replaces that frame's entry.
+        if (historyFrameId === id && history.length > 0) history[0] = frame;
+        else {
+          history.unshift(frame);
+          history.length = Math.min(history.length, 8);
+          historyFrameId = id;
+        }
       }
     }
     const current = frameCache.frame;
@@ -575,64 +603,77 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   }
 
   // ─── Probe (tests) ──────────────────────────────────────────────────
-  async function probe(target: { orb: string } | { immersion: true }, output: "direction" | "ray"): Promise<PanoramaProbeResult> {
+  async function probe(target: { orb: string } | { immersion: true }, outputs: readonly PanoramaProbeOutput[]): Promise<PanoramaProbeResult> {
     if (!available) throw new Error(unavailableReason ?? "unavailable");
+    if (outputs.length === 0) throw new Error("Ask for at least one output.");
     const width = engine.getRenderWidth();
     const height = engine.getRenderHeight();
-    const rtt = new RenderTargetTexture("panorama-probe", { width, height }, scene, false, true, Constants.TEXTURETYPE_FLOAT);
-    rtt.clearColor.set(0, 0, 0, 0);
-    const probeMesh = new Mesh("panorama-probe-mesh", scene);
-    probeMesh.alwaysSelectAsActiveMesh = true;
-    probeMesh.isPickable = false;
-    probeMesh.doNotSyncBoundingInfo = true;
-    probeMesh.layerMask = 0;
-    let material: ShaderMaterial;
-    let observer: Observer<Mesh> | null;
+    const orb = "orb" in target ? orbs.get(target.orb) : null;
+    if ("orb" in target && !orb) throw new Error(`No orb ${target.orb}`);
+    if (!("orb" in target) && !immersionState) throw new Error("Immersion is not shown.");
     let captured: PanoramaCameraFrame | null = null;
-    if ("orb" in target) {
-      const orb = orbs.get(target.orb);
-      if (!orb) throw new Error(`No orb ${target.orb}`);
-      quadData.applyToMesh(probeMesh);
-      material = orbMaterial("panorama-probe-orb", [output === "direction" ? "#define OUTPUT_DIRECTION" : "#define OUTPUT_RAY"], false);
-      observer = probeMesh.onBeforeRenderObservable.add(() => {
-        const frames = drawFrame();
-        if (!frames) return;
-        captured = frames.current;
-        const radius = orb.expansion?.radiusMeters ?? effectiveOrbRadius(orb.state.radiusMeters, length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms, appearance.markerDiameterCssPx);
-        orb.applyUniforms(material, frames.uniforms, radius, 1);
-      });
-    } else {
-      if (!immersionState) throw new Error("Immersion is not shown.");
-      triangleData.applyToMesh(probeMesh);
-      material = immersionMaterial(immersionDefines(immersionState, output));
-      observer = probeMesh.onBeforeRenderObservable.add(() => {
-        const override = immersionState?.view ? currentFrame(immersionState.view) : null;
-        const frames = override ? { current: override, uniforms: override } : drawFrame();
-        if (!frames) return;
-        captured = frames.current;
-        applyImmersionUniforms(material, frames.uniforms);
-      });
-    }
-    probeMesh.material = material;
-    rtt.renderList = [probeMesh];
-    rtt.activeCamera = scene.activeCamera;
-    rtt.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
-    scene.customRenderTargets.push(rtt);
+    const passes = outputs.map(output => {
+      const rtt = new RenderTargetTexture(`panorama-probe-${output}`, { width, height }, scene, false, true, Constants.TEXTURETYPE_FLOAT);
+      // Unset, a render target clears to the scene's colour; the probe needs coverage 0 where nothing drew.
+      rtt.clearColor = new Color4(0, 0, 0, 0);
+      const mesh = new Mesh(`panorama-probe-mesh-${output}`, scene);
+      mesh.alwaysSelectAsActiveMesh = true;
+      mesh.isPickable = false;
+      mesh.doNotSyncBoundingInfo = true;
+      mesh.layerMask = 0;
+      const define = output === "direction" ? "#define OUTPUT_DIRECTION" : "#define OUTPUT_RAY";
+      let material: ShaderMaterial;
+      let observer: Observer<Mesh> | null;
+      if (orb) {
+        quadData.applyToMesh(mesh);
+        material = orbMaterial(`panorama-probe-orb-${output}`, [define], false);
+        observer = mesh.onBeforeRenderObservable.add(() => {
+          const frames = drawFrame();
+          if (!frames) return;
+          captured = frames.current;
+          const radius = orb.expansion?.radiusMeters ?? effectiveOrbRadius(orb.state.radiusMeters, length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms, appearance.markerDiameterCssPx);
+          orb.applyUniforms(material, frames.uniforms, radius, 1);
+        });
+      } else {
+        triangleData.applyToMesh(mesh);
+        material = immersionMaterial(immersionDefines(immersionState!, output));
+        observer = mesh.onBeforeRenderObservable.add(() => {
+          const override = immersionState?.view ? currentFrame(immersionState.view) : null;
+          const frames = override ? { current: override, uniforms: override } : drawFrame();
+          if (!frames) return;
+          captured = frames.current;
+          applyImmersionUniforms(material, frames.uniforms);
+        });
+      }
+      mesh.material = material;
+      rtt.renderList = [mesh];
+      rtt.activeCamera = scene.activeCamera;
+      rtt.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+      return { output, rtt, mesh, material, observer, ownsMaterial: Boolean(orb) };
+    });
+    for (const pass of passes) scene.customRenderTargets.push(pass.rtt);
     try {
-      await new Promise<void>(resolve => {
-        rtt.onAfterRenderObservable.addOnce(() => resolve());
-        options.requestRender();
-      });
-      const pixels = await rtt.readPixels(0, 0, null, true, false);
-      if (!pixels || !captured) throw new Error("The probe read nothing back.");
-      return { width, height, data: new Float32Array((pixels as Float32Array).buffer.slice(0)), frame: captured };
+      // Every pass renders in the same frame, so every output shares one camera.
+      const rendered = Promise.all(passes.map(pass => new Promise<void>(resolve => { pass.rtt.onAfterRenderObservable.addOnce(() => resolve()); })));
+      options.requestRender();
+      await rendered;
+      const results: Partial<Record<PanoramaProbeOutput, Float32Array>> = {};
+      for (const pass of passes) {
+        const pixels = await pass.rtt.readPixels(0, 0, null, true, false);
+        if (!pixels) throw new Error("The probe read nothing back.");
+        results[pass.output] = new Float32Array((pixels as Float32Array).buffer.slice(0));
+      }
+      if (!captured) throw new Error("The probe drew nothing.");
+      return { width, height, outputs: results, frame: captured };
     } finally {
-      const index = scene.customRenderTargets.indexOf(rtt);
-      if (index >= 0) scene.customRenderTargets.splice(index, 1);
-      probeMesh.onBeforeRenderObservable.remove(observer);
-      probeMesh.dispose();
-      if ("orb" in target) material.dispose();
-      rtt.dispose();
+      for (const pass of passes) {
+        const index = scene.customRenderTargets.indexOf(pass.rtt);
+        if (index >= 0) scene.customRenderTargets.splice(index, 1);
+        pass.mesh.onBeforeRenderObservable.remove(pass.observer);
+        pass.mesh.dispose();
+        if (pass.ownsMaterial) pass.material.dispose();
+        pass.rtt.dispose();
+      }
     }
   }
 
@@ -653,6 +694,12 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       delayFrames = Math.max(0, Math.min(7, Math.round(frames)));
     },
     drawRecords: () => records,
+    inspectOrb(id, frame) {
+      const orb = orbs.get(id);
+      if (!orb) return null;
+      const { marker, radiusMeters, content, visible, texture } = orb.state;
+      return { marker, radiusMeters, effectiveRadius: orb.effectiveRadius(frame), content, visible, textured: texture !== null };
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
