@@ -1,6 +1,7 @@
 import { FreeCamera, NullEngine, Scene, Vector3 } from "@babylonjs/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { createPanoramaRenderer } from "./panoramaRenderer";
+import { length, type Vec3 } from "../../../scenes/panoramaMath";
+import { createPanoramaRenderer, orbQuad } from "./panoramaRenderer";
 
 const engines: NullEngine[] = [];
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose(); });
@@ -38,7 +39,18 @@ describe("panorama renderer camera frame", () => {
     camera.setTarget(Vector3.Zero());
     const frame = renderer.cameraFrame()!;
     // The forward axis points from the eye to the target, within the view matrix's float32 precision.
-    const length = Math.hypot(...frame.eye);
-    for (let axis = 0; axis < 3; axis++) expect(frame.eye[axis] + frame.view.forward[axis] * length).toBeCloseTo(0, 6);
+    const distance = Math.hypot(...frame.eye);
+    for (let axis = 0; axis < 3; axis++) expect(frame.eye[axis] + frame.view.forward[axis] * distance).toBeCloseTo(0, 6);
+  });
+});
+
+describe("orb geometry", () => {
+  it("leaves room beyond the silhouette for an outline, in CSS px at the orb's distance", () => {
+    const frame = { view: { forward: [0, 0, 1] as Vec3, right: [1, 0, 0] as Vec3, up: [0, 1, 0] as Vec3, verticalFovRad: Math.PI / 2, aspect: 1 }, viewportHeightCssPx: 1000 };
+    const plain = orbQuad([0, 0, 100], 1, frame, 0.1);
+    const outlined = orbQuad([0, 0, 100], 1, frame, 0.1, 4);
+    // 100 m away, 1000 CSS px span 200 m.
+    expect(length(outlined.u) - length(plain.u)).toBeCloseTo(4 * 0.2, 9);
+    expect(length(outlined.v) - length(plain.v)).toBeCloseTo(4 * 0.2, 9);
   });
 });

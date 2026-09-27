@@ -125,7 +125,7 @@ function harness(options: { available?: boolean; groundReady?: boolean } = {}) {
   settings.register(FOSS_EARTH_PARAMETERS);
   const history = createMemorySceneHistory();
 
-  const load = (reduced = false) => loadScene(runtime, manifest, {
+  const load = (reduced = false, document: Record<string, unknown> = manifest) => loadScene(runtime, document, {
     baseUrl: MANIFEST_URL, settings, history,
     internals: {
       renderer, backend, now: () => clock, reducedMotion: () => reduced,
@@ -147,8 +147,8 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 async function settle(h: ReturnType<typeof harness>, frames = 40) {
   for (let i = 0; i < frames; i++) { h.tick(); await flush(); }
 }
-async function loaded(h: ReturnType<typeof harness>, reduced = false): Promise<SceneHandle> {
-  const result = await h.load(reduced);
+async function loaded(h: ReturnType<typeof harness>, reduced = false, document?: Record<string, unknown>): Promise<SceneHandle> {
+  const result = await h.load(reduced, document);
   if (!result.ok) throw new Error(JSON.stringify(result.errors));
   await settle(h);
   return result.handle;
@@ -208,6 +208,42 @@ describe("loadScene", () => {
     expect(h.owner.current()).toBeNull();
     expect(h.restored.at(-1)).toBe(overviewBefore);
     expect(h.shown.at(-1)).toBeNull();
+    expect(h.continuous()).toBe(0);
+  });
+
+  it("draws the scene's outline, grows a hovered orb to its hover scale and back, and resets it on entering", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, { ...manifest, markerStyle: { outline: { color: "#ffcc00", widthPx: 2 }, hover: { scale: 2 } } });
+    handles.push(handle);
+    const photo = h.orbs.get("pair-photo")!;
+    expect(photo.state.outline).toEqual({ color: [1, 0.8, 0, 1], widthPx: 2 });
+    expect(photo.state.displayScale).toBe(1);
+    expect(h.continuous()).toBe(0);
+
+    handle.hover("pair-photo");
+    expect(handle.status.hovered).toBe("pair-photo");
+    expect(h.continuous()).toBe(1);
+    // Half of scene.panorama.hoverDuration's 120 ms, eased.
+    h.tick(60);
+    expect(photo.state.displayScale).toBeCloseTo(1.5, 9);
+    h.tick(60);
+    expect(photo.state.displayScale).toBe(2);
+    expect(h.continuous()).toBe(0);
+    handle.hover(null);
+    h.tick(120);
+    expect(photo.state.displayScale).toBe(1);
+    expect(h.continuous()).toBe(0);
+
+    handle.hover("pair-photo");
+    h.tick(120);
+    const entering = handle.enter("pair-photo");
+    await settle(h, 40);
+    expect(await entering).toEqual({ ok: true });
+    expect(photo.state.displayScale).toBe(1);
+    expect(handle.status.hovered).toBeNull();
+    // Only the overview's orbs are hovered.
+    handle.hover("pair-grid");
+    expect(handle.status.hovered).toBeNull();
     expect(h.continuous()).toBe(0);
   });
 

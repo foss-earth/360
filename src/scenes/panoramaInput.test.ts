@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { attachLookInput, createLookModel, zoomFov, type LookSettings } from "./panoramaInput";
 
 const SETTINGS: LookSettings = {
-  dragSensitivity: 0.15, lookRate: 90, zoomPerNotch: 0.1, zoomRate: 0.5, pinchGain: 1, inertiaHalfLifeMs: 100,
+  dragSensitivity: 0.15, swipeSensitivity: 0.1, lookRate: 90, zoomPerNotch: 0.1, zoomRate: 0.5, pinchGain: 1, inertiaHalfLifeMs: 100,
   fovRangeDeg: { min: 35, max: 90 }, pitchRangeDeg: { min: -85, max: 85 }, reducedMotion: false,
 };
 
@@ -25,6 +25,16 @@ describe("panorama look model", () => {
     expect(model.get().verticalFovDeg).toBe(35);
     for (let i = 0; i < 100; i++) model.wheel(100);
     expect(model.get().verticalFovDeg).toBe(90);
+  });
+
+  it("moves the image with a swipe as a drag does: scrolling right looks right, scrolling down looks down", () => {
+    const model = createLookModel({ headingDeg: 10, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
+    model.swipe(100, 0);
+    expect(model.get().headingDeg).toBeCloseTo(20);
+    model.swipe(0, 100);
+    expect(model.get().pitchDeg).toBeCloseTo(-10);
+    // The OS adds momentum after the fingers lift; the model adds none.
+    expect(model.moving()).toBe(false);
   });
 
   it("clamps pitch to its range and keeps heading in [0, 360)", () => {
@@ -82,5 +92,40 @@ describe("panorama look input", () => {
     expect(model.moving()).toBe(false);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(onExit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("panorama wheel input", () => {
+  const wheel = (init: WheelEventInit) => new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
+  const attach = (mode: "trackpad" | "mouse") => {
+    const canvas = document.createElement("canvas");
+    document.body.append(canvas);
+    const model = createLookModel({ headingDeg: 90, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
+    const input = attachLookInput({ canvas, model, onExit: vi.fn(), onUserInput: vi.fn(), requestFrame: vi.fn(), inputMode: () => mode });
+    return { canvas, model, input };
+  };
+
+  it("in trackpad mode looks around with a two-finger swipe, and zooms with a pinch", () => {
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const { canvas, model, input } = attach("trackpad");
+    canvas.dispatchEvent(wheel({ deltaX: 30, deltaY: -20 }));
+    expect(model.get().headingDeg).toBeCloseTo(93);
+    expect(model.get().pitchDeg).toBeCloseTo(2);
+    expect(model.get().verticalFovDeg).toBe(60);
+    // A pause ends the swipe; the pinch that follows is its own gesture.
+    vi.spyOn(performance, "now").mockReturnValue(2_000);
+    canvas.dispatchEvent(wheel({ deltaY: -10, ctrlKey: true }));
+    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1));
+    expect(model.get().headingDeg).toBeCloseTo(93);
+    input.detach();
+    vi.restoreAllMocks();
+  });
+
+  it("in mouse mode zooms with the wheel, as before", () => {
+    const { canvas, model, input } = attach("mouse");
+    canvas.dispatchEvent(wheel({ deltaY: -100 }));
+    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1));
+    expect(model.get().headingDeg).toBe(90);
+    input.detach();
   });
 });

@@ -22,6 +22,7 @@ import { isNumberRange } from "../settings/values";
 import { SCENE_PARAMETERS } from "../settings/catalogue/scenes";
 import { chooseRepresentation, MIB, representationFaceTexels } from "./budget";
 import type { AttributionRecord, ResolvedAsset, ResolvedPanorama, ResolvedRepresentation, SceneDiagnostic, ValidatedScene, ViewRecord } from "./format";
+import { isSafariGestureSupported } from "../input/safariGestures";
 import { attachLookInput, createLookModel, type LookModel, type LookSettings, type LookState } from "./panoramaInput";
 import {
   captureRelativeMarker,
@@ -64,7 +65,7 @@ const DECODE_WALL_SECTION = "background/panorama decode";
 export type SceneRuntime = Pick<BabylonRuntime,
   | "surface" | "acquireNavigation" | "captureNavigationSnapshot" | "restoreNavigationSnapshot"
   | "getPresentationView" | "setNavigationIntentHandler" | "requestRender" | "beginContinuous" | "endContinuous"
-  | "onDeviceLost" | "onDeviceRestored" | "prepareTerrain"> & {
+  | "onDeviceLost" | "onDeviceRestored" | "prepareTerrain"> & Partial<Pick<BabylonRuntime, "getInputMode">> & {
     scene?: Scene;
     /** Where the scene's own frame work is timed, when the runtime profiles. */
     frameProfile?: { profiler: FrameProfiler };
@@ -98,6 +99,8 @@ export interface SceneStatus {
   active: string | null;
   /** The panorama being prepared or entered. */
   target: string | null;
+  /** The orb under the pointer in the overview, which grows if its style asks. */
+  hovered: string | null;
   entries: SceneEntryStatus[];
   groups: { id: string; title: string; members: string[] }[];
   /** Credits for what is on screen now. */
@@ -134,6 +137,8 @@ export interface SceneHandle {
   hotspots(): { id: string; label: string; x: number; y: number }[];
   /** Orbs under a canvas point, nearest first; enter the first to select it. */
   pick(clientX: number, clientY: number): string[];
+  /** The orb a pointer is over, or null: it grows to its style's hover scale. Only in the overview. */
+  hover(id: string | null): void;
   subscribe(listener: (status: SceneStatus) => void): () => void;
   /** Called after each drawn frame while something on screen moves, for DOM overlays. */
   onFrame(listener: () => void): () => void;
@@ -336,6 +341,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   const devicePixelsPerCss = () => (engine ? 1 / engine.getHardwareScalingLevel() : 1);
   const lookSettings = (): LookSettings => ({
     dragSensitivity: num("scene.panorama.dragSensitivity"),
+    swipeSensitivity: num("scene.panorama.swipeSensitivity"),
     lookRate: num("scene.panorama.lookRate"),
     zoomPerNotch: num("scene.panorama.zoomPerNotch"),
     zoomRate: num("scene.panorama.zoomRate"),
@@ -464,6 +470,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       generation,
       active: immersion?.id ?? null,
       target,
+      hovered,
       entries: list,
       groups: current.groups.map(group => ({ id: group.id, title: group.title, members: [...group.members] })),
       credits: [...visibleAssets].map(assetId => ({ assetId, ...current.assets.get(assetId)!.attribution })),
@@ -489,6 +496,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         content,
         texture: null,
         visible: true,
+        outline: record.markerStyle.outline,
+        displayScale: 1,
       });
       const entry: Entry = {
         record, asset, frame, content, orb,
@@ -509,6 +518,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
 
   function unmount(): void {
+    resetHover();
     for (const entry of entries.values()) {
       entry.preview.controller?.abort();
       entry.preview.handle?.release();
@@ -622,6 +632,54 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
   const smooth = (t: number) => t * t * (3 - 2 * t);
 
+  // ─── Hover ──────────────────────────────────────────────────────────
+  // The orb under the pointer grows to its style's hover scale, and the one
+  // it left shrinks back, each over `scene.panorama.hoverDuration`.
+  let hovered: string | null = null;
+  /** How far each orb that is not at rest has grown, 0–1. */
+  const hoverAmounts = new Map<string, number>();
+  let hoverLastMs = 0;
+  let hoverRendering: (() => void) | null = null;
+  function setHovered(id: string | null): void {
+    const next = id !== null && phase === "overview" && entries.has(id) ? id : null;
+    if (next === hovered) return;
+    hovered = next;
+    if (next && entries.get(next)!.record.markerStyle.hoverScale > 1 && !hoverAmounts.has(next)) hoverAmounts.set(next, 0);
+    if (hoverAmounts.size && !hoverRendering) {
+      hoverLastMs = now();
+      frameCallbacks.add(stepHover);
+      runtime.beginContinuous();
+      hoverRendering = () => { frameCallbacks.delete(stepHover); runtime.endContinuous(); };
+    }
+    emit();
+  }
+  function stepHover(): void {
+    const at = now();
+    const duration = reducedMotion() ? 0 : num("scene.panorama.hoverDuration");
+    const change = duration > 0 ? (at - hoverLastMs) / duration : 1;
+    hoverLastMs = at;
+    for (const [id, amount] of hoverAmounts) {
+      const entry = entries.get(id);
+      const goal = id === hovered ? 1 : 0;
+      const next = goal > amount ? Math.min(goal, amount + change) : Math.max(goal, amount - change);
+      entry?.orb.update({ displayScale: 1 + (entry.record.markerStyle.hoverScale - 1) * smooth(next) });
+      if (!entry || (next === 0 && goal === 0)) hoverAmounts.delete(id);
+      else hoverAmounts.set(id, next);
+    }
+    if ([...hoverAmounts].every(([id, amount]) => amount === (id === hovered ? 1 : 0))) {
+      hoverRendering?.();
+      hoverRendering = null;
+    }
+  }
+  /** Every orb back to its size at once: on entering, and when the scene's orbs go. */
+  function resetHover(): void {
+    hovered = null;
+    for (const id of hoverAmounts.keys()) entries.get(id)?.orb.update({ displayScale: 1 });
+    hoverAmounts.clear();
+    hoverRendering?.();
+    hoverRendering = null;
+  }
+
   // ─── Views ──────────────────────────────────────────────────────────
   function geoView(look: LookState, roll: number): GeoView {
     return { headingDeg: look.headingDeg, pitchDeg: look.pitchDeg, rollDeg: roll, verticalFovDeg: look.verticalFovDeg };
@@ -701,6 +759,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         onExit: () => { void handle_.exit(); },
         onUserInput: () => cancelArrival(),
         requestFrame: () => runtime.requestRender(),
+        inputMode: () => runtime.getInputMode?.() ?? "auto",
+        safariGestures: isSafariGestureSupported(),
       })
       : { applyIntents() {}, detach() {} };
     const offIntents = runtime.setNavigationIntentHandler(lease, frame => input.applyIntents(frame));
@@ -917,6 +977,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       const state = startImmersion(lease, entry, handle, incoming, { representation: handle.representation.id, limitation: entry.preview.limitation });
       immersion = state;
       phase = "immersive";
+      resetHover();
       target = null;
       if (history) {
         if (!historyStarted) { recordHistoryOverview(); historyStarted = true; }
@@ -1193,6 +1254,9 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         if (point) out.push({ id: link.id, label: link.label, x: point.x, y: point.y });
       }
       return out;
+    },
+    hover(id) {
+      if (!disposed) setHovered(id);
     },
     pick(clientX, clientY) {
       if (immersion || disposed) return [];

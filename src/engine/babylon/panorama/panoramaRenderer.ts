@@ -77,6 +77,10 @@ export interface OrbState {
   content: Mat3;
   texture: BaseTexture | null;
   visible: boolean;
+  /** A ring just outside the silhouette: sRGB and alpha 0–1, width in CSS px; null draws none. */
+  outline: { color: readonly [number, number, number, number]; widthPx: number } | null;
+  /** Multiplies the radius after the screen-size bounds, as a hover grows the orb: 1 normally. */
+  displayScale: number;
 }
 
 export interface OrbExpansion {
@@ -162,8 +166,12 @@ export interface PanoramaRenderer {
 
 // ─── Pure geometry ─────────────────────────────────────────────────────
 
-/** The quad an orb draws: perpendicular to the axis, or across the view when the sphere is near or around the eye. */
-export function orbQuad(rel: Vec3, radius: number, frame: Pick<PanoramaCameraFrame, "view" | "viewportHeightCssPx">, nearPlane: number): { center: Vec3; u: Vec3; v: Vec3; fullscreen: boolean } {
+/**
+ * The quad an orb draws: perpendicular to the axis, or across the view when
+ * the sphere is near or around the eye. `marginCssPx` more beyond the
+ * silhouette leaves room for an outline.
+ */
+export function orbQuad(rel: Vec3, radius: number, frame: Pick<PanoramaCameraFrame, "view" | "viewportHeightCssPx">, nearPlane: number, marginCssPx = 0): { center: Vec3; u: Vec3; v: Vec3; fullscreen: boolean } {
   const d = length(rel);
   const { view } = frame;
   const tanHalf = Math.tan(view.verticalFovRad / 2);
@@ -182,7 +190,7 @@ export function orbQuad(rel: Vec3, radius: number, frame: Pick<PanoramaCameraFra
   const alpha = Math.asin(radius / d);
   // Three pixels beyond the silhouette leave room for its antialiased edge.
   const pixel = (d * 2 * tanHalf) / Math.max(1, frame.viewportHeightCssPx);
-  const half = d * Math.tan(alpha) + 3 * pixel;
+  const half = d * Math.tan(alpha) + (3 + marginCssPx) * pixel;
   const helper = Math.abs(dot(a, view.up)) < 0.9 ? view.up : view.right;
   const u = normalize(cross(a, helper));
   const v = cross(u, a);
@@ -381,6 +389,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     material: ShaderMaterial;
     revealMaterial: ShaderMaterial;
     applyUniforms(material: ShaderMaterial, uniforms: PanoramaCameraFrame, radius: number, opacity: number): boolean;
+    /** The radius drawn at `distance` in `frame`: the screen-size bounds, then the display scale. */
+    drawnRadius(distance: number, frame: PanoramaCameraFrame): number;
   }
 
   function applyContent(material: ShaderMaterial, content: Mat3, prefix = "content"): void {
@@ -408,6 +418,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const revealMaterial = orbMaterial(`panorama-orb-reveal-material-${id}`, [], true);
     mesh.material = material;
     revealMesh.material = revealMaterial;
+    const outlineColor = new Color4();
 
     const orb: OrbInternal = {
       id,
@@ -422,7 +433,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         if (!marker) return false;
         const rel = sub(marker, uniforms.eye);
         const near = scene.activeCamera?.minZ ?? NEAR_PLANE_WITHOUT_CAMERA;
-        const quad = orbQuad(rel, radius, uniforms, near);
+        const outline = orb.state.outline;
+        const quad = orbQuad(rel, radius, uniforms, near, outline?.widthPx ?? 0);
         target.setMatrix("viewRotProj", uniforms.viewRotProj);
         target.setVector3("quadCenter", toVector(quad.center) as never);
         target.setVector3("quadU", toVector(quad.u) as never);
@@ -431,6 +443,11 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         target.setFloat("radius", radius);
         target.setFloat("tanPreviewHalfAngle", Math.tan((appearance.previewFovDeg * Math.PI) / 360));
         target.setFloat("opacity", opacity);
+        // The shader measures the outline in the pixels it draws.
+        const devicePerCss = engine.getRenderHeight() / Math.max(1, uniforms.viewportHeightCssPx);
+        const [r, g, b, a] = outline?.color ?? [0, 0, 0, 0];
+        target.setColor4("outlineColor", outlineColor.set(r, g, b, a));
+        target.setFloat("outlineWidth", (outline?.widthPx ?? 0) * devicePerCss);
         applyContent(target, orb.state.content);
         target.setTexture("panoramaCube", orb.state.texture ?? placeholder!);
         return true;
@@ -446,10 +463,13 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         revealMesh.setEnabled(expansion !== null && orb.state.marker !== null && orb.state.texture !== null);
         options.requestRender();
       },
+      drawnRadius(distance, frame) {
+        return effectiveOrbRadius(orb.state.radiusMeters, distance, frame, appearance.markerDiameterCssPx) * orb.state.displayScale;
+      },
       effectiveRadius(frame) {
         const f = frame ?? drawFrame()?.current ?? null;
         if (!f || !orb.state.marker) return null;
-        return effectiveOrbRadius(orb.state.radiusMeters, length(sub(orb.state.marker, f.eye)), f, appearance.markerDiameterCssPx);
+        return orb.drawnRadius(length(sub(orb.state.marker, f.eye)), f);
       },
       dispose() {
         orbs.delete(id);
@@ -465,7 +485,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const observer: Observer<Mesh> | null = mesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames) return;
-      const radius = effectiveOrbRadius(orb.state.radiusMeters, length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms, appearance.markerDiameterCssPx);
+      const radius = orb.drawnRadius(length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms);
       if (orb.applyUniforms(material, frames.uniforms, radius, 1)) record(`orb:${id}`, frames.current, frames.uniforms);
     }));
     const revealObserver: Observer<Mesh> | null = revealMesh.onBeforeRenderObservable.add(timed(() => {
@@ -574,12 +594,13 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       if (!marker || !orb.state.visible || !orb.state.texture) continue;
       const rel = sub(marker, frame.eye);
       const d = length(rel);
-      const radius = effectiveOrbRadius(orb.state.radiusMeters, d, frame, appearance.markerDiameterCssPx);
+      const radius = orb.drawnRadius(d, frame);
       if (d <= radius) continue;
       const axis = scale(rel, 1 / d);
       const angle = Math.acos(Math.max(-1, Math.min(1, dot(axis, ray))));
-      const alpha = Math.asin(radius / d);
-      const onSilhouette = angle <= alpha;
+      // The outline is part of what is drawn, so part of what a click selects.
+      const outlineAngle = Math.atan(((orb.state.outline?.widthPx ?? 0) * 2 * tanHalf) / Math.max(1, frame.viewportHeightCssPx));
+      const onSilhouette = angle <= Math.asin(radius / d) + outlineAngle;
       if (!onSilhouette && angle > hitHalfAngle) continue;
       const depth = d - radius;
       if (isOccluded(frame.eye, axis, depth)) continue;

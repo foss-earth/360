@@ -1,14 +1,20 @@
 /**
- * Looking around an entered panorama (§5): pointer and touch drags, wheel
- * and pinch zoom, arrow keys and controller sticks, with optional inertia.
- * Dragging the image right looks left and dragging it down looks up;
- * wheel-up and pinch-out narrow the vertical field of view. Zoom works on
+ * Looking around an entered panorama (§5): pointer and touch drags,
+ * trackpad swipes, wheel and pinch zoom, arrow keys and controller sticks,
+ * with optional inertia. Dragging the image right looks left and dragging
+ * it down looks up; a two-finger swipe moves the image as a drag does.
+ * Wheel-up and pinch-out narrow the vertical field of view. Zoom works on
  * tan(fov/2), exponentially, within `scene.panorama.verticalFovRange`.
+ * Wheel events are read as the globe reads them, by `input.mode`: in
+ * trackpad mode a swipe looks and a pinch zooms, in mouse mode the wheel
+ * zooms.
  *
  * The model is pure; `attachLookInput` binds it to the canvas and window
  * while the scene holds navigation, and nothing else.
  */
 import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
+import type { InputModePreference } from "../input/inputSettings";
+import { createWheelGestureClassifier } from "../input/wheelController";
 import { DEG_TO_RAD, RAD_TO_DEG } from "./panoramaMath";
 
 export interface LookState {
@@ -20,6 +26,8 @@ export interface LookState {
 export interface LookSettings {
   /** deg per CSS px: `scene.panorama.dragSensitivity`. */
   dragSensitivity: number;
+  /** deg per CSS px of a trackpad swipe's scroll: `scene.panorama.swipeSensitivity`. */
+  swipeSensitivity: number;
   /** deg/s for keys and a full stick: `lookRate`. */
   lookRate: number;
   /** log-tan-FOV per wheel notch and per second: `zoomPerNotch`, `zoomRate`. */
@@ -38,6 +46,8 @@ const INERTIA_STOP_DEG_PER_S = 0.05;
 /** Pixels in a wheel "line" and a "page", to measure notches alike. */
 const WHEEL_LINE_PX = 16;
 const WHEEL_NOTCH_PX = 100;
+/** Browsers report a trackpad pinch as ctrl+wheel with deltaY = −100 ln(scale). */
+const PINCH_WHEEL_PX_PER_LOG_SCALE = 100;
 
 export function clampLook(state: LookState, settings: LookSettings): LookState {
   return {
@@ -60,6 +70,10 @@ export interface LookModel {
   release(): void;
   /** Wheel deltaY in CSS px; negative (wheel up) narrows. */
   wheel(deltaPx: number): void;
+  /** A trackpad swipe's scroll deltas, CSS px: it moves the image as a drag the other way does. */
+  swipe(deltaX: number, deltaY: number): void;
+  /** Zooms by a pinch's scale change as a natural logarithm; positive (fingers apart) narrows. */
+  pinchBy(logScale: number): void;
   /** Pinch from one finger separation to another. */
   pinch(fromPx: number, toPx: number): void;
   /** Held rates: look right/up and zoom in, each −1 to 1. */
@@ -98,9 +112,19 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
     wheel(deltaPx) {
       apply({ ...state, verticalFovDeg: zoomFov(state.verticalFovDeg, (-deltaPx / WHEEL_NOTCH_PX) * settings().zoomPerNotch) });
     },
+    swipe(deltaX, deltaY) {
+      // The OS applies the scroll direction the person chose, and momentum after the fingers lift.
+      const gain = settings().swipeSensitivity;
+      velocity = { heading: 0, pitch: 0 };
+      apply({ ...state, headingDeg: state.headingDeg + deltaX * gain, pitchDeg: state.pitchDeg - deltaY * gain });
+    },
     pinch(fromPx, toPx) {
       if (!(fromPx > 0 && toPx > 0)) return;
-      apply({ ...state, verticalFovDeg: zoomFov(state.verticalFovDeg, Math.log(toPx / fromPx) * settings().pinchGain) });
+      this.pinchBy(Math.log(toPx / fromPx));
+    },
+    pinchBy(logScale) {
+      if (!Number.isFinite(logScale)) return;
+      apply({ ...state, verticalFovDeg: zoomFov(state.verticalFovDeg, logScale * settings().pinchGain) });
     },
     setRates(next) {
       rates = next;
@@ -155,6 +179,10 @@ export interface LookInputOptions {
   requestFrame(): void;
   /** Whether a binding is being captured, which keeps input. */
   capturing?: () => boolean;
+  /** How wheel events are read, as the globe reads them: the runtime's `input.mode`. */
+  inputMode?: () => InputModePreference;
+  /** Safari on macOS reports trackpad pinches as gesture events, and ctrl+wheel is not a pinch there. */
+  safariGestures?: boolean;
 }
 
 /** Binds look input; returns the controller-intent handler and a detach function. */
@@ -164,6 +192,11 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
   let pinchFrom: number | null = null;
   const keys = new Set<string>();
   const padRates = { lookX: 0, lookY: 0, zoom: 0 };
+  const classifyWheel = createWheelGestureClassifier({
+    isSafariWithGestures: options.safariGestures ?? false,
+    mode: options.inputMode ?? (() => "auto"),
+  });
+  let gestureScale = 1;
 
   const syncRates = (): void => {
     const key = (name: string) => (keys.has(name) ? 1 : 0);
@@ -214,9 +247,28 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
   };
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    const gesture = classifyWheel(event);
+    if (gesture === "ignore") return;
     options.onUserInput();
     const scale = event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? WHEEL_NOTCH_PX * 3 : 1;
-    model.wheel(event.deltaY * scale);
+    // A swipe, or shift+wheel, looks around: what pans or orbits the globe.
+    if (gesture === "pan" || gesture === "orbit") model.swipe(event.deltaX * scale, event.deltaY * scale);
+    else if (gesture === "pinchZoom") model.pinchBy((-event.deltaY * scale) / PINCH_WHEEL_PX_PER_LOG_SCALE);
+    else model.wheel(event.deltaY * scale);
+    options.requestFrame();
+  };
+  // Safari's trackpad pinch: `scale` is relative to the gesture's start.
+  const onGestureStart = (event: Event): void => {
+    event.preventDefault();
+    gestureScale = 1;
+  };
+  const onGestureChange = (event: Event): void => {
+    event.preventDefault();
+    const next = (event as Event & { scale?: number }).scale;
+    if (typeof next !== "number" || !(next > 0)) return;
+    options.onUserInput();
+    model.pinch(gestureScale, next);
+    gestureScale = next;
     options.requestFrame();
   };
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -247,6 +299,10 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
   canvas.addEventListener("wheel", onWheel, { passive: false });
+  if (options.safariGestures) {
+    canvas.addEventListener("gesturestart", onGestureStart, { passive: false });
+    canvas.addEventListener("gesturechange", onGestureChange, { passive: false });
+  }
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
   window.addEventListener("blur", onBlur);
@@ -273,6 +329,8 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("wheel", onWheel);
+      canvas.removeEventListener("gesturestart", onGestureStart);
+      canvas.removeEventListener("gesturechange", onGestureChange);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
