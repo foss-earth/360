@@ -12,6 +12,7 @@
 import type { Scene } from "@babylonjs/core";
 import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
 import type { BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
+import type { FrameProfiler } from "../perf/frameProfiler";
 import type { NavigationLease, NavigationPresentation } from "../engine/babylon/navigationLease";
 import { createPanoramaRenderer, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
 import { createPanoramaUploader, isWebGpuEngine, type PanoramaGpuTexture, type PanoramaUploader } from "../engine/babylon/panorama/panoramaTextures";
@@ -46,13 +47,28 @@ import { createBrowserSceneHistory, type SceneHistoryAdapter, type SceneHistoryE
 import { interpolateView, presentationFromView, snapshotFromOverview, viewFromPresentation, type GeoView } from "./sceneView";
 import { validateScene, type SceneLimits } from "./validateScene";
 
+/**
+ * The scene's frame budget sections. Its per-frame work runs in the scene's
+ * before-render step, inside profileBabylonScene's "render"; decode wall time
+ * is background work, alongside frames rather than in one.
+ */
+const FRAME_SECTION = "render/scenes";
+const UPLOAD_SECTION = "render/scenes/upload";
+const PLACEMENT_SECTION = "render/scenes/placement";
+const DECODE_COMPLETION_SECTION = "scenes/decode completion";
+const DECODE_WALL_SECTION = "background/panorama decode";
+
 // ─── Public types ──────────────────────────────────────────────────────
 
 /** What a scene needs from the runtime: the public `foss-earth/runtime` surface. */
 export type SceneRuntime = Pick<BabylonRuntime,
   | "surface" | "acquireNavigation" | "captureNavigationSnapshot" | "restoreNavigationSnapshot"
   | "getPresentationView" | "setNavigationIntentHandler" | "requestRender" | "beginContinuous" | "endContinuous"
-  | "onDeviceLost" | "onDeviceRestored" | "prepareTerrain"> & { scene?: Scene };
+  | "onDeviceLost" | "onDeviceRestored" | "prepareTerrain"> & {
+    scene?: Scene;
+    /** Where the scene's own frame work is timed, when the runtime profiles. */
+    frameProfile?: { profiler: FrameProfiler };
+  };
 
 export type ScenePhase = "overview" | "preparing" | "entering" | "immersive" | "exiting" | "disposed";
 
@@ -283,6 +299,13 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   const engine = scene?.getEngine() ?? null;
   const canvas = engine?.getRenderingCanvas() ?? null;
   const now = options.internals?.now ?? (() => performance.now());
+  const profiler = runtime.frameProfile?.profiler ?? null;
+  const timedCall = <T>(section: string, work: () => T): T => {
+    const started = profiler?.clock() ?? 0;
+    const result = work();
+    if (started) profiler!.add(section, started);
+    return result;
+  };
   const listeners = new Set<(status: SceneStatus) => void>();
   const frameListeners = new Set<() => void>();
   const cleanups: (() => void)[] = [];
@@ -328,6 +351,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const created = createPanoramaRenderer(scene!, {
       getPresentationView: () => runtime.getPresentationView(),
       requestRender: () => runtime.requestRender(),
+      ...(profiler ? { profiler } : {}),
     });
     options.internals?.onRenderer?.(created);
     return created;
@@ -348,9 +372,16 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const refuse = () => Promise.reject(new ResourceRefusal(renderer.unavailableReason ?? "Panoramas need WebGPU.", "device"));
     return {
       fetch: (url, init) => fetch(url, init),
-      decode: bytes => createImageBitmap(new Blob([bytes as BlobPart]), { colorSpaceConversion: "none", premultiplyAlpha: "none", imageOrientation: "from-image" }),
-      uploadCube: (faces, label) => (gpuUploader ? gpuUploader.uploadCube(faces, label) : refuse()),
-      uploadEquirect: (image, label) => (gpuUploader ? gpuUploader.uploadEquirect(image, label) : refuse()),
+      // The browser decodes off the main thread: its wall time runs alongside frames, not in one.
+      async decode(bytes) {
+        const started = profiler?.clock() ?? 0;
+        const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), { colorSpaceConversion: "none", premultiplyAlpha: "none", imageOrientation: "from-image" });
+        if (started) profiler!.add(DECODE_WALL_SECTION, started);
+        return bitmap;
+      },
+      // Allocating the texture and queueing its rows: what finishing a decode costs the frame.
+      uploadCube: (faces, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadCube(faces, label)) : refuse()),
+      uploadEquirect: (image, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadEquirect(image, label)) : refuse()),
       maxTextureSide: deviceMaxSide,
     };
   })();
@@ -363,11 +394,12 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return () => { scene!.onBeforeRenderObservable.remove(observer); };
   });
   const offFrame = onFrame(() => {
-    uploader?.pump();
+    const started = profiler?.clock() ?? 0;
+    timedCall(UPLOAD_SECTION, () => uploader?.pump());
     for (const callback of [...frameCallbacks]) callback();
-    refreshPlacements();
-    tryApplyOverview();
+    timedCall(PLACEMENT_SECTION, () => { refreshPlacements(); tryApplyOverview(); });
     for (const listener of [...frameListeners]) listener();
+    if (started) profiler!.add(FRAME_SECTION, started);
   });
   cleanups.push(offFrame);
 

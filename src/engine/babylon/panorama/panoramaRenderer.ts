@@ -35,6 +35,7 @@ import {
   type Vec3,
   type ViewBasis,
 } from "../../../scenes/panoramaMath";
+import type { FrameProfiler } from "../../../perf/frameProfiler";
 import { NAVIGATION_PRESENTATION_LAYER, type NavigationPresentation } from "../navigationLease";
 import {
   IMMERSION_FRAGMENT,
@@ -225,7 +226,12 @@ export interface PanoramaRendererOptions {
   /** The lease's presented view, read at draw time. */
   getPresentationView(): NavigationPresentation | null;
   requestRender(): void;
+  /** Where preparing each draw's direction and parameters is timed, inside the draw phase. */
+  profiler?: Pick<FrameProfiler, "clock" | "add">;
 }
+
+/** Nested under profileBabylonScene's draw phase, which these draws run in. */
+const UNIFORMS_SECTION = "render/draw/panorama uniforms";
 
 export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOptions): PanoramaRenderer {
   const engine = scene.getEngine();
@@ -236,6 +242,13 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   const records: { frameId: number; target: string; cameraRevision: string; uniformRevision: string }[] = [];
   const orbs = new Map<string, OrbInternal>();
   let disposed = false;
+  const profiler = options.profiler;
+  /** Times a draw's preparation in the frame budget. */
+  const timed = (prepare: () => void) => (): void => {
+    const started = profiler?.clock() ?? 0;
+    prepare();
+    if (started) profiler!.add(UNIFORMS_SECTION, started);
+  };
 
   function canvasCssHeight(): number {
     const canvas = engine.getRenderingCanvas();
@@ -421,17 +434,17 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         options.requestRender();
       },
     };
-    const observer: Observer<Mesh> | null = mesh.onBeforeRenderObservable.add(() => {
+    const observer: Observer<Mesh> | null = mesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames) return;
       const radius = effectiveOrbRadius(orb.state.radiusMeters, length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms, appearance.markerDiameterCssPx);
       if (orb.applyUniforms(material, frames.uniforms, radius, 1)) record(`orb:${id}`, frames.current, frames.uniforms);
-    });
-    const revealObserver: Observer<Mesh> | null = revealMesh.onBeforeRenderObservable.add(() => {
+    }));
+    const revealObserver: Observer<Mesh> | null = revealMesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames || !orb.expansion) return;
       if (orb.applyUniforms(revealMaterial, frames.uniforms, orb.expansion.radiusMeters, orb.expansion.reveal)) record(`reveal:${id}`, frames.current, frames.uniforms);
-    });
+    }));
     orbs.set(id, orb);
     orb.update({});
     return orb;
@@ -487,7 +500,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     // Drawn by the globe camera normally and while it shows only the presentation layer.
     immersionMesh.layerMask = 0x0fffffff | NAVIGATION_PRESENTATION_LAYER;
     immersionMesh.setEnabled(false);
-    immersionMesh.onBeforeRenderObservable.add(() => {
+    immersionMesh.onBeforeRenderObservable.add(timed(() => {
       if (!immersionState) return;
       const material = immersionMesh.material as ShaderMaterial | null;
       if (!material) return;
@@ -496,7 +509,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       if (!frames) return;
       applyImmersionUniforms(material, frames.uniforms);
       record("immersion", frames.current, frames.uniforms);
-    });
+    }));
   }
   const immersion: PanoramaImmersion = {
     show(state) {
