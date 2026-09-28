@@ -1,5 +1,9 @@
 # Work prompt: a panorama opens as a tab, at full detail
 
+Status: done on 2026-09-27. What was built, and why the images were soft, is in
+[panorama scenes → After the second user trial](proposals/panorama-scenes.md#stage-1-as-built).
+Do not execute it again.
+
 Execute this task when the user starts a fresh conversation with this file.
 Work in `/Users/felg/gh/foss-earth`, then in the tour at `/Users/felg/gh/UMN-VR/UMN-VR.github.io`
 for its one part. Read the current `AGENTS.md` of both first, then:

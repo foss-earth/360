@@ -18,6 +18,8 @@ const MANIFEST_URL = "https://foss-earth.test/examples/panorama-scenes/campus-pa
 // jsdom's import.meta.url is not a file URL; tests run from the repository root.
 const PUBLIC = path.join(process.cwd(), "public");
 const manifest = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-scenes/campus-pair.scene.json"), "utf8")) as Record<string, unknown>;
+// One panorama with previews up to 256 px faces and whole images 1024 and 2048 px wide, in the same folder.
+const cardinal = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-scenes/umn-cardinal.scene.json"), "utf8")) as Record<string, unknown>;
 
 function harness(options: { available?: boolean; groundReady?: boolean; canvas?: HTMLCanvasElement } = {}) {
   let clock = 0;
@@ -135,7 +137,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, textures, history,
+    load, tick, runtime, owner, orbs, shown, restored, textures, history, settings,
     presentation: () => presentation,
     continuous: () => continuous,
     setGround: (ready: boolean) => { groundReady = ready; },
@@ -299,6 +301,51 @@ describe("loadScene", () => {
     h.tick(16);
     expect(heading()).toBeCloseTo(before + 3, 9);
     canvas.remove();
+  });
+
+  it("shows the largest image the image detail allows, says why nothing larger is, and chooses again when the detail moves", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    expect(entry.images.map(image => [image.id, image.aroundPx])).toEqual([
+      ["preview-32", 128], ["preview-64", 256], ["preview-128", 512], ["preview-256", 1024], ["whole-1024", 1024], ["whole-2048", 2048],
+    ]);
+    const entering = handle.enter(entry.id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    // The default: the largest, which is all the panorama offers.
+    expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
+    expect(h.settings.getReading("scene.panorama.immersionWidth")).toBe("2048 px on screen");
+
+    h.settings.set("scene.panorama.immersionWidth", 1500);
+    await settle(h, 40);
+    expect(handle.status.immersionDetail).toEqual({
+      representation: "whole-1024", loading: null,
+      limitation: "The 2048 px image is more than the 1500 px image detail allows.",
+    });
+    // Below every whole image: the orb's preview, which is loaded anyway.
+    h.settings.set("scene.panorama.immersionWidth", 256);
+    await settle(h, 40);
+    expect(handle.status.immersionDetail!.representation).toBe("preview-128");
+    h.settings.reset("scene.panorama.immersionWidth");
+    await settle(h, 40);
+    expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
+  });
+
+  it("names the budget that keeps a larger image out, and loads it once the budget allows", async () => {
+    const h = harness();
+    h.settings.set("scene.panorama.sourceGpuMiB", 2);
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const entering = handle.enter(handle.status.entries[0].id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    expect(handle.status.immersionDetail!.representation).toMatch(/^preview-/);
+    expect(handle.status.immersionDetail!.limitation).toMatch(/^The 1024 px image needs 2\.7 MiB of GPU memory with its mips; [\d.]+ MiB of the 2\.0 MiB panorama GPU memory is free \(Scenes → Loading and memory\)\.$/);
+    h.settings.set("scene.panorama.sourceGpuMiB", 64);
+    await settle(h, 40);
+    expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
   });
 
   it("follows a link, keeps the original overview, and Back from B returns to A", async () => {

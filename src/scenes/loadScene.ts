@@ -20,7 +20,7 @@ import { getAppSettings } from "../settings/appSettings";
 import type { SettingsRegistry } from "../settings/registry";
 import { isNumberRange } from "../settings/values";
 import { SCENE_PARAMETERS } from "../settings/catalogue/scenes";
-import { chooseRepresentation, MIB, representationFaceTexels } from "./budget";
+import { chooseRepresentation, MIB, representationAroundPx, representationFaceTexels, representationGpuBytes, representationMaxSide } from "./budget";
 import type { AttributionRecord, ResolvedAsset, ResolvedPanorama, ResolvedRepresentation, SceneDiagnostic, ValidatedScene, ViewRecord } from "./format";
 import { isSafariGestureSupported } from "../input/safariGestures";
 import { attachLookInput, createLookModel, type LookModel, type LookSettings, type LookState } from "./panoramaInput";
@@ -73,6 +73,21 @@ export type SceneRuntime = Pick<BabylonRuntime,
 
 export type ScenePhase = "overview" | "preparing" | "entering" | "immersive" | "exiting" | "disposed";
 
+/** One image a panorama offers: a representation of its asset. */
+export interface SceneImageStatus {
+  id: string;
+  role: "preview" | "immersion";
+  projection: "cube" | "equirectangular";
+  /** Pixels: an equirectangular image's width and height, or a cube face's side twice. */
+  width: number;
+  height: number;
+  /** Pixels around the whole turn: an equirectangular image's width, or four cube faces. */
+  aroundPx: number;
+  encodedBytes: number;
+  /** GPU bytes once uploaded with its mips. */
+  gpuBytes: number;
+}
+
 export interface SceneEntryStatus {
   id: string;
   title: string;
@@ -85,8 +100,22 @@ export interface SceneEntryStatus {
   /** The preview's size, and what kept it smaller than asked, if anything. */
   previewDetail: { representation: string; faceTexels: number; limitation: string | null } | null;
   marker: { mode: "ground-relative" | "capture-relative"; eastM: number; northM: number; offsetM: number; radiusMeters: number; authoredRadius: boolean };
-  capture: { longitudeDeg: number; latitudeDeg: number; heightMeters: number | null };
+  capture: { longitudeDeg: number; latitudeDeg: number; heightMeters: number | null; horizontalAccuracyMeters: number | null };
+  /** The image's pose, and whether its heading was set against north: null when the scene does not say. */
+  pose: { headingDeg: number; pitchDeg: number; rollDeg: number; aligned: boolean | null };
+  attribution: AttributionRecord | null;
+  /** Every image its asset offers, smallest first. */
+  images: SceneImageStatus[];
   links: { id: string; label: string; target: string; enabled: boolean; placed: boolean }[];
+}
+
+/** Which image of the panorama on screen is shown, and why no larger one is. */
+export interface ImmersionDetailStatus {
+  representation: string;
+  /** Why no larger image is on screen; null when this is the largest the panorama offers. */
+  limitation: string | null;
+  /** A larger or smaller image on its way to replace it, while it loads. */
+  loading: string | null;
 }
 
 export interface SceneStatus {
@@ -105,7 +134,7 @@ export interface SceneStatus {
   groups: { id: string; title: string; members: string[] }[];
   /** Credits for what is on screen now. */
   credits: (AttributionRecord & { assetId: string })[];
-  immersionDetail: { representation: string; limitation: string | null } | null;
+  immersionDetail: ImmersionDetailStatus | null;
   overview: "none" | "pending" | "applied";
   renderingAvailable: boolean;
   unavailableReason: string | null;
@@ -287,7 +316,7 @@ interface Immersion {
   lease: NavigationLease;
   id: string;
   shown: { handle: SourceHandle<PanoramaGpuTexture>; entry: Entry };
-  detail: { representation: string; limitation: string | null };
+  detail: ImmersionDetailStatus;
   refine: AbortController | null;
   look: LookModel;
   roll: number;
@@ -300,6 +329,29 @@ interface Immersion {
 }
 
 let sessionCounter = 0;
+
+/** An asset's images, smallest first, as the panorama's tab lists them. */
+function imagesOf(asset: ResolvedAsset): SceneImageStatus[] {
+  return asset.representations
+    .map(representation => ({
+      id: representation.id,
+      role: representation.role,
+      projection: representation.projection,
+      width: representation.projection === "cube" ? representation.faceSize : representation.width,
+      height: representation.projection === "cube" ? representation.faceSize : representation.height,
+      aroundPx: representationAroundPx(representation),
+      encodedBytes: representation.encodedBytes,
+      gpuBytes: representationGpuBytes(representation),
+    }))
+    .sort((a, b) => a.aroundPx - b.aroundPx || a.gpuBytes - b.gpuBytes);
+}
+
+/** How the panorama's tab names an image in a sentence. */
+function imageName(representation: ResolvedRepresentation): string {
+  return representation.projection === "cube"
+    ? `The ${representation.faceSize} px ${representation.role === "preview" ? "preview " : ""}cube`
+    : `The ${representation.width} px image`;
+}
 
 function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, settings: SettingsRegistry, options: LoadSceneOptions): SceneHandle {
   const scene = runtime.scene;
@@ -393,7 +445,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       maxTextureSide: deviceMaxSide,
     };
   })();
-  const resources = createPanoramaResources(backend, resourceSettingsFrom(id => settings.get(id), deviceMaxSide()));
+  const resources = createPanoramaResources(backend, resourceSettingsFrom(id => settings.get(id), detailCap()));
 
   // One frame driver: scene frames in the app, a test's ticker otherwise.
   const frameCallbacks = new Set<() => void>();
@@ -439,7 +491,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
           id, title: id, description: null, supported: false, message: unsupported?.reason ?? "Not shown by this loader.",
           placement: "unavailable", preview: "failed", previewDetail: null,
           marker: { mode: "ground-relative", eastM: 0, northM: 0, offsetM: 0, radiusMeters: 0, authoredRadius: false },
-          capture: { longitudeDeg: 0, latitudeDeg: 0, heightMeters: null }, links: [],
+          capture: { longitudeDeg: 0, latitudeDeg: 0, heightMeters: null, horizontalAccuracyMeters: null },
+          pose: { headingDeg: 0, pitchDeg: 0, rollDeg: 0, aligned: null }, attribution: null, images: [], links: [],
         };
       }
       const { record } = entry;
@@ -454,7 +507,13 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         preview: entry.preview.state,
         previewDetail: representation ? { representation: representation.id, faceTexels: representationFaceTexels(representation), limitation: entry.preview.limitation } : null,
         marker: { ...record.marker, radiusMeters: record.marker.radiusMeters ?? num("scene.panorama.markerRadiusMeters"), authoredRadius: record.marker.radiusMeters !== undefined },
-        capture: { longitudeDeg: record.capture.longitudeDeg, latitudeDeg: record.capture.latitudeDeg, heightMeters: record.capture.height?.meters ?? null },
+        capture: {
+          longitudeDeg: record.capture.longitudeDeg, latitudeDeg: record.capture.latitudeDeg,
+          heightMeters: record.capture.height?.meters ?? null, horizontalAccuracyMeters: record.capture.horizontalAccuracyMeters ?? null,
+        },
+        pose: { headingDeg: record.imagePose.headingDeg, pitchDeg: record.imagePose.pitchDeg, rollDeg: record.imagePose.rollDeg, aligned: record.imagePose.aligned ?? null },
+        attribution: { ...entry.asset.attribution },
+        images: imagesOf(entry.asset),
         links: record.links.map(link => ({
           id: link.id, label: link.label, target: link.target,
           enabled: entries.has(link.target), placed: Boolean(link.direction),
@@ -853,31 +912,73 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     }
   }
 
-  /** Loads the immersion representation in the background and crossfades to it, or keeps the preview and says why. */
+  /** The image detail as a width cap in px around the turn: infinite at its largest, where only the device limits. */
+  function detailCap(): number {
+    const state = settings.inspect("scene.panorama.immersionWidth");
+    if (typeof state.value !== "number") return Number.POSITIVE_INFINITY;
+    return state.bounds && state.value >= state.bounds.max ? Number.POSITIVE_INFINITY : state.value;
+  }
+  const mebibytes = (bytes: number) => `${(bytes / MIB).toFixed(bytes >= 10 * MIB ? 0 : 1)} MiB`;
+
+  /** Why `rep` does not fit the GPU budgets now, in words. */
+  function memoryRefusal(rep: ResolvedRepresentation): string {
+    const bytes = representationGpuBytes(rep);
+    const pools = resources.stats().pools;
+    if (bytes > pools.overlap.limit - pools.overlap.reserved) {
+      return `${imageName(rep)} needs ${mebibytes(bytes)} of GPU memory with its mips, more than the ${mebibytes(pools.overlap.limit)} replacement overlap allows (Scenes → Loading and memory).`;
+    }
+    return `${imageName(rep)} needs ${mebibytes(bytes)} of GPU memory with its mips; ${mebibytes(Math.max(0, resources.gpuRoom()))} of the ${mebibytes(pools.sourceGpu.limit)} panorama GPU memory is free (Scenes → Loading and memory).`;
+  }
+
+  /**
+   * Chooses the image to show and, when it is not the one on screen, loads it
+   * in the background and crossfades to it. By default that is the largest
+   * image the panorama offers within the image detail, the device and the
+   * budgets; with a sharpness target, the smallest that meets it. Either
+   * way the status says which image is shown and why no larger one is.
+   */
   function refine(state: Immersion): void {
-    state.refine?.abort();
-    const controller = new AbortController();
-    state.refine = controller;
     const entry = state.shown.entry;
-    const frame = renderer.cameraFrame(runtime.getPresentationView());
-    // Without a frame to measure, ask for the largest that fits.
-    const wanted = frame
-      ? immersionFaceTexels(frame.viewportHeightCssPx * devicePixelsPerCss(), state.look.get().verticalFovDeg * DEG_TO_RAD, num("scene.panorama.immersionDensity"))
+    const shownId = state.shown.handle.representation.id;
+    const previewId = entry.preview.handle?.representation.id ?? null;
+    const cap = detailCap();
+    const target = settings.get("scene.panorama.immersionDensity");
+    const frame = typeof target === "number" ? renderer.cameraFrame(runtime.getPresentationView()) : null;
+    // Off, or without a frame to measure: the largest the detail allows.
+    const wanted = typeof target === "number" && frame
+      ? immersionFaceTexels(frame.viewportHeightCssPx * devicePixelsPerCss(), state.look.get().verticalFovDeg * DEG_TO_RAD, target)
       : Number.POSITIVE_INFINITY;
-    const maxSide = Math.min(deviceMaxSide(), num("scene.panorama.immersionMaxSide"));
-    const candidates = entry.asset.representations.filter(rep => rep.role === "immersion" || rep.id === state.shown.handle.representation.id);
+    const deviceSide = deviceMaxSide();
+    // The orb's preview is on the GPU already and can always be shown; the image on screen, within the detail.
+    const candidates = entry.asset.representations.filter(rep => rep.role === "immersion" || rep.id === shownId || rep.id === previewId);
     const choice = chooseRepresentation(candidates, "any", wanted, rep => {
-      if (rep.id === state.shown.handle.representation.id) return null;
-      const side = rep.projection === "cube" ? rep.faceSize : rep.width;
-      if (side > maxSide) return `${side} px is over the ${maxSide} px limit (scene.panorama.immersionMaxSide)`;
-      return resources.wouldFit(rep, true) ? null : "it does not fit the panorama GPU memory or the replacement overlap (scene.panorama.sourceGpuMiB, overlapMiB)";
+      if (rep.id === previewId) return null;
+      if (representationAroundPx(rep) > cap) return `${imageName(rep)} is more than the ${Math.round(cap)} px image detail allows.`;
+      if (rep.id === shownId) return null;
+      if (representationMaxSide(rep) > deviceSide) return `${imageName(rep)} is ${representationMaxSide(rep)} px on a side; this renderer's largest texture is ${deviceSide} px.`;
+      return resources.wouldFit(rep, true) ? null : memoryRefusal(rep);
     });
-    if (!choice || choice.representation.id === state.shown.handle.representation.id) {
-      state.detail = { representation: state.shown.handle.representation.id, limitation: choice?.limitation ?? "no larger representation fits" };
+    if (!choice) return;
+    const chosen = choice.representation;
+    const largest = Math.max(...entry.asset.representations.map(representationAroundPx));
+    const limitation = choice.next?.reason
+      ?? (representationAroundPx(chosen) < largest && typeof target === "number"
+        ? `The sharpness target is met: ${Math.round(wanted)} texels per cube face, ${target} per rendered pixel (360 image settings → Image).`
+        : null);
+    // Already on its way: let it arrive.
+    if (state.refine && !state.refine.signal.aborted && state.detail.loading === chosen.id) return;
+    state.refine?.abort();
+    state.refine = null;
+    if (chosen.id === shownId) {
+      state.detail = { representation: shownId, limitation, loading: null };
       emit();
       return;
     }
-    resources.acquire(entry.asset, choice.representation, { signal: controller.signal, priority: 5, overlap: true }).then(async handle => {
+    const controller = new AbortController();
+    state.refine = controller;
+    state.detail = { representation: shownId, limitation: null, loading: chosen.id };
+    emit();
+    resources.acquire(entry.asset, chosen, { signal: controller.signal, priority: 5, overlap: true }).then(async handle => {
       if (immersion !== state || controller.signal.aborted || state.shown.entry !== entry) { handle.release(); return; }
       const previous = state.shown.handle;
       const fade = reducedMotion() ? num("scene.panorama.reducedFadeDuration") : num("scene.panorama.fadeDuration");
@@ -892,13 +993,15 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       if (immersion !== state) { handle.release(); return; }
       renderer.immersion.show({ source: sourceOf(entry, handle) });
       state.shown = { handle, entry };
-      state.detail = { representation: handle.representation.id, limitation: choice.limitation };
+      state.detail = { representation: handle.representation.id, limitation, loading: null };
+      if (state.refine === controller) state.refine = null;
       // The preview stays cached for the orb; only the reference is dropped.
       if (previous !== entry.preview.handle) previous.release();
       emit();
     }, error => {
       if (immersion !== state || controller.signal.aborted) return;
-      state.detail = { representation: state.shown.handle.representation.id, limitation: error instanceof Error ? error.message : String(error) };
+      if (state.refine === controller) state.refine = null;
+      state.detail = { representation: state.shown.handle.representation.id, limitation: error instanceof Error ? error.message : String(error), loading: null };
       emit();
     });
   }
@@ -998,7 +1101,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         incoming = view;
       }
       stopCancelling();
-      const state = startImmersion(lease, entry, handle, incoming, { representation: handle.representation.id, limitation: entry.preview.limitation });
+      const state = startImmersion(lease, entry, handle, incoming, { representation: handle.representation.id, limitation: entry.preview.limitation, loading: null });
       immersion = state;
       phase = "immersive";
       resetHover();
@@ -1065,7 +1168,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       if (from.handle !== from.entry.preview.handle) from.handle.release();
       state.shown = { handle, entry };
       state.id = entry.record.id;
-      state.detail = { representation: handle.representation.id, limitation: entry.preview.limitation };
+      state.detail = { representation: handle.representation.id, limitation: entry.preview.limitation, loading: null };
       entry.placement.frozen = true;
       state.roll = 0;
       renderer.immersion.show({ source: sourceOf(entry, handle) });
@@ -1186,16 +1289,23 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }));
 
   // ─── Settings ───────────────────────────────────────────────────────
-  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionMaxSide"].map(id => `scene.panorama.${id}`);
-  for (const id of loadingIds) cleanups.push(settings.watch(id, () => resources.setSettings(resourceSettingsFrom(each => settings.get(each), deviceMaxSide()))));
+  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth"].map(id => `scene.panorama.${id}`);
+  for (const id of loadingIds) cleanups.push(settings.watch(id, () => resources.setSettings(resourceSettingsFrom(each => settings.get(each), detailCap()))));
+  // The image detail, the sharpness target and the GPU budgets choose the image on screen again at once.
+  for (const id of ["scene.panorama.immersionWidth", "scene.panorama.immersionDensity", "scene.panorama.sourceGpuMiB", "scene.panorama.overlapMiB"]) {
+    cleanups.push(settings.watch(id, () => { if (immersion && phase === "immersive") refine(immersion); }));
+  }
   for (const id of ["scene.panorama.uploadMiBPerFrame", "scene.panorama.uploadOutstandingMiB"]) cleanups.push(settings.watch(id, () => uploader?.setLimits(uploadLimits())));
   for (const id of ["scene.panorama.previewFov", "scene.panorama.markerDiameter", "scene.panorama.hitTargetDiameter"]) cleanups.push(settings.watch(id, applyAppearance));
   cleanups.push(settings.watch("scene.panorama.markerRadiusMeters", () => {
     for (const entry of entries.values()) if (entry.record.marker.radiusMeters === undefined) entry.orb.update({ radiusMeters: num("scene.panorama.markerRadiusMeters") });
     emit();
   }));
-  const mebibytes = (bytes: number) => `${(bytes / MIB).toFixed(bytes >= 10 * MIB ? 0 : 1)} MiB`;
   const readings: [string, () => string | null][] = [
+    ["scene.panorama.immersionWidth", () => {
+      const shown = immersion?.shown.handle.representation;
+      return shown ? `${representationAroundPx(shown)} px on screen` : null;
+    }],
     ["scene.panorama.sourceGpuMiB", () => { const p = resources.stats().pools.sourceGpu; return `${mebibytes(p.reserved)} reserved, ${mebibytes(p.peak)} at most so far`; }],
     ["scene.panorama.overlapMiB", () => `${mebibytes(resources.stats().pools.overlap.reserved)} of replacement coexisting`],
     ["scene.panorama.decodedMiB", () => `${mebibytes(resources.stats().pools.decoded.reserved)} decoded and waiting to upload`],
