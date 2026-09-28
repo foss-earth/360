@@ -190,6 +190,8 @@ export interface LookInputOptions {
   inputMode?: () => InputModePreference;
   /** Safari on macOS reports trackpad pinches as gesture events, and ctrl+wheel is not a pinch there. */
   safariGestures?: boolean;
+  /** When the last wheel event came before looking began: a gesture under way then, such as a swipe's momentum over the globe, looks nowhere. */
+  precedingWheelMs?: number;
 }
 
 /** Binds look input; returns the controller-intent handler and a detach function. */
@@ -202,6 +204,7 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
   const classifyWheel = createWheelGestureClassifier({
     isSafariWithGestures: options.safariGestures ?? false,
     mode: options.inputMode ?? (() => "auto"),
+    precedingWheelMs: options.precedingWheelMs,
   });
   let gestureScale = 1;
 

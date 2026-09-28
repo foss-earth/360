@@ -11,7 +11,7 @@ import { FOSS_EARTH_PARAMETERS } from "../settings/catalogue";
 import { loadScene, type SceneFailure, type SceneHandle, type SceneRenderer, type SceneRuntime } from "./loadScene";
 import { createMemorySceneHistory } from "./sceneHistory";
 import { enuFrame, geodeticPoint, scale, add, sub, length, dot, vec3, type Vec3 } from "./panoramaMath";
-import { INSIDE_SHARE, orbitAngles } from "./panoramaFlight";
+import { INSIDE_SHARE, orbitAngles, orbitLook } from "./panoramaFlight";
 import type { ResourceBackend } from "./panoramaResources";
 
 const GROUND = 250;
@@ -151,6 +151,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   });
   return {
     load, tick, runtime, owner, orbs, shown, restored, placed, textures, history, settings, failures,
+    clock: () => clock,
     /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
     failFetches: (pattern: RegExp | null) => { failing = pattern; },
     presentation: () => presentation,
@@ -294,29 +295,162 @@ describe("loadScene", () => {
     expect(h.continuous()).toBe(0);
   });
 
-  it("ends the flight out at once on Escape, and a Back during it joins the exit", async () => {
+  it("brakes a flight out cut short by Escape where it got to, and a Back during it joins the exit", async () => {
     const h = harness({ placeCamera: true });
     const handle = await loaded(h);
     handles.push(handle);
     const entering = handle.enter("pair-photo");
     await settle(h, 80);
     await entering;
+    const photo = h.orbs.get("pair-photo")!;
+    const marker = photo.state.marker as Vec3;
     const exiting = handle.exit();
     await settle(h, 5);
     expect(handle.status.phase).toBe("exiting");
     // Links are not followed on the way out.
     expect(await handle.follow("to-grid")).toMatchObject({ ok: false, reason: "unavailable" });
+    const cutAt = h.placed.at(-1)!;
     const placedBefore = h.placed.length;
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     h.history.back();
-    await settle(h, 2);
+    await settle(h, 60);
     expect(await exiting).toEqual({ ok: true });
     expect(handle.status.phase).toBe("overview");
-    // No more of the flight after Escape; the camera is at its end.
-    expect(h.placed.length).toBe(placedBefore);
-    expect(h.restored.at(-1)!.camera.radius).toBe(600);
+    // It went on a little, slowing, rather than jumping to the flight's end.
+    const coasted = h.placed.slice(placedBefore).map(view => length(sub(vec3(view.position), vec3(cutAt.position))));
+    expect(coasted.length).toBeGreaterThan(5);
+    for (let i = 2; i < coasted.length; i++) expect(coasted[i] - coasted[i - 1]).toBeLessThanOrEqual(coasted[i - 1] - coasted[i - 2] + 1e-9);
+    const rest = h.placed.at(-1)!;
+    expect(length(sub(vec3(rest.position), marker))).toBeLessThan(10);
+    // The globe camera's own orbit there: the eye where it stopped, as near as the zoom limit allows.
+    const end = h.restored.at(-1)!;
+    const center = vec3(end.camera.center);
+    const look = orbitLook(center, end.camera.yaw, end.camera.pitch);
+    const eye = sub(center, scale(look, end.camera.radius));
+    expect(length(sub(eye, vec3(rest.position)))).toBeLessThan(1e-6);
+    expect(end.camera.radius).toBe(25);
+    expect(end.camera.fov).toBe(0.8);
+    expect(photo.expansions.at(-1)).toBeNull();
     expect(h.owner.current()).toBeNull();
     expect(h.continuous()).toBe(0);
+  });
+
+  it("brakes a flight in cut short by a swipe where it got to, entering nothing, and a press stops the braking", async () => {
+    // On the page, so its events reach the window as a canvas's do.
+    const canvas = document.body.appendChild(document.createElement("canvas"));
+    const h = harness({ placeCamera: true, canvas });
+    const now = vi.spyOn(performance, "now").mockImplementation(() => h.clock());
+    try {
+      const handle = await loaded(h);
+      handles.push(handle);
+      const entering = handle.enter("pair-grid");
+      await settle(h, 20);
+      const grid = h.orbs.get("pair-grid")!;
+      const marker = grid.state.marker as Vec3;
+      const cutAt = h.placed.at(-1)!;
+      canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
+      await settle(h, 4);
+      // Braking: still moving on towards the orb, not back to the start.
+      const moved = length(sub(vec3(h.placed.at(-1)!.position), vec3(cutAt.position)));
+      expect(moved).toBeGreaterThan(0);
+      expect(length(sub(vec3(h.placed.at(-1)!.position), marker))).toBeLessThan(length(sub(vec3(cutAt.position), marker)));
+      expect(handle.status.phase).toBe("overview");
+      // The same swipe going on, as its momentum does, changes nothing; a press grabs the camera where it is.
+      canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 8, bubbles: true }));
+      await settle(h, 1);
+      const placedBefore = h.placed.length;
+      expect(placedBefore).toBeGreaterThan(0);
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, bubbles: true }));
+      await settle(h, 5);
+      expect(await entering).toMatchObject({ ok: false, reason: "cancelled" });
+      const rest = h.placed.at(-1)!;
+      expect(h.placed.length).toBe(placedBefore);
+      const end = h.restored.at(-1)!;
+      expect(end).not.toBe(h.runtime.captureNavigationSnapshot());
+      const center = vec3(end.camera.center);
+      const eye = sub(center, scale(orbitLook(center, end.camera.yaw, end.camera.pitch), end.camera.radius));
+      expect(length(sub(eye, vec3(rest.position)))).toBeLessThan(1e-6);
+      expect(grid.expansions.at(-1)).toBeNull();
+      expect(h.owner.current()).toBeNull();
+      expect(h.history.entries()).toHaveLength(0);
+      expect(h.continuous()).toBe(0);
+    } finally {
+      now.mockRestore();
+      canvas.remove();
+    }
+  });
+
+  it("lets an entry take over a flight in cut short, from where it stopped", async () => {
+    // On the page, so its events reach the window as a canvas's do.
+    const canvas = document.body.appendChild(document.createElement("canvas"));
+    const h = harness({ placeCamera: true, canvas });
+    const now = vi.spyOn(performance, "now").mockImplementation(() => h.clock());
+    try {
+      const handle = await loaded(h);
+      handles.push(handle);
+      const first = handle.enter("pair-grid");
+      await settle(h, 20);
+      canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
+      await settle(h, 2);
+      const restoredBefore = h.restored.length;
+      const second = handle.enter("pair-photo");
+      await settle(h, 80);
+      expect(await first).toMatchObject({ ok: false, reason: "cancelled" });
+      expect(await second).toEqual({ ok: true });
+      // Settled at once where the coast had got to, then in.
+      expect(h.restored.length).toBe(restoredBefore + 1);
+      expect(h.restored.at(-1)!.camera.radius).toBeGreaterThanOrEqual(25);
+      expect(handle.status.phase).toBe("immersive");
+    } finally {
+      now.mockRestore();
+      canvas.remove();
+    }
+  });
+
+  it("settles a flight out at once where it got to when an entry takes over", async () => {
+    const h = harness({ placeCamera: true });
+    const handle = await loaded(h);
+    handles.push(handle);
+    const first = handle.enter("pair-photo");
+    await settle(h, 80);
+    expect(await first).toEqual({ ok: true });
+    const exiting = handle.exit();
+    await settle(h, 10);
+    const placedBefore = h.placed.length;
+    const restoredBefore = h.restored.length;
+    const entering = handle.enter("pair-grid");
+    expect(await exiting).toEqual({ ok: true });
+    // No coast: one settled orbit where the flight was, short of its end.
+    expect(h.placed.length).toBe(placedBefore);
+    expect(h.restored.length).toBe(restoredBefore + 1);
+    expect(h.restored.at(-1)!.camera.radius).toBeLessThan(600);
+    await settle(h, 80);
+    expect(await entering).toEqual({ ok: true });
+    expect(handle.status.phase).toBe("immersive");
+  });
+
+  it("does not take a swipe's momentum for input: Escape while the image glides still pulls out all the way", async () => {
+    // On the page, so its events reach the window as a canvas's do.
+    const canvas = document.body.appendChild(document.createElement("canvas"));
+    const h = harness({ placeCamera: true, canvas });
+    const now = vi.spyOn(performance, "now").mockImplementation(() => h.clock());
+    try {
+      const handle = await loaded(h);
+      handles.push(handle);
+      const entering = handle.enter("pair-photo");
+      await settle(h, 80);
+      expect(await entering).toEqual({ ok: true });
+      const swipe = () => canvas.dispatchEvent(new WheelEvent("wheel", { deltaX: 12.5, bubbles: true, cancelable: true }));
+      for (let i = 0; i < 5; i++) { swipe(); await settle(h, 1); }
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      // The momentum goes on through the whole flight out.
+      for (let i = 0; i < 80; i++) { swipe(); await settle(h, 1); }
+      expect(handle.status.phase).toBe("overview");
+      expect(h.restored.at(-1)!.camera.radius).toBe(600);
+    } finally {
+      now.mockRestore();
+      canvas.remove();
+    }
   });
 
   it("completes an exit whose flight the runtime ends, at the overview it left", async () => {
