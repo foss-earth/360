@@ -51,26 +51,28 @@ function mount() {
 }
 
 describe("a panorama's tabs", () => {
-  it("are titled by the panorama being entered or on screen, and exist only then", () => {
+  it("are titled by the panorama being entered or on screen, exist only then, and say when one is on screen", () => {
     const { tabs, show } = mount();
     const heard = vi.fn();
     tabs.subscribe(heard);
-    expect(tabs.getSnapshot()).toEqual({ title: null });
+    expect(tabs.getSnapshot()).toEqual({ title: null, onScreen: false });
     show(status("preparing", null, "northrop-mall"));
     const entering = tabs.getSnapshot();
-    expect(entering).toEqual({ title: "360: Northrop Mall" });
-    show(status("immersive", "northrop-mall", null));
-    // Unchanged: the same object, and nobody is told.
+    expect(entering).toEqual({ title: "360: Northrop Mall", onScreen: false });
+    show(status("entering", null, "northrop-mall"));
+    // Unchanged while the camera flies in: the same object, and nobody is told.
     expect(tabs.getSnapshot()).toBe(entering);
     expect(heard).toHaveBeenCalledTimes(1);
-    // Following a link keeps the title until the destination is on screen.
+    show(status("immersive", "northrop-mall", null));
+    expect(tabs.getSnapshot()).toEqual({ title: "360: Northrop Mall", onScreen: true });
+    // Following a link keeps the title until the destination is on screen, and a panorama on screen throughout.
     show(status("preparing", "northrop-mall", "walter"));
-    expect(tabs.getSnapshot().title).toBe("360: Northrop Mall");
+    expect(tabs.getSnapshot()).toEqual({ title: "360: Northrop Mall", onScreen: true });
     show(status("immersive", "walter", null));
-    expect(tabs.getSnapshot().title).toBe("360: Walter Library");
+    expect(tabs.getSnapshot()).toEqual({ title: "360: Walter Library", onScreen: true });
     show(status("exiting", "walter", null));
-    expect(tabs.getSnapshot()).toEqual({ title: null });
-    expect(heard).toHaveBeenCalledTimes(3);
+    expect(tabs.getSnapshot()).toEqual({ title: null, onScreen: false });
+    expect(heard).toHaveBeenCalledTimes(4);
   });
 
   it("show the photograph's details, its links, which image is on screen and why nothing larger is", () => {

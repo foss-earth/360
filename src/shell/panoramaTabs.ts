@@ -4,7 +4,8 @@
  * detail; and 360 image settings, with what matters only inside a panorama.
  * Both exist only while a panorama is entered or being entered. Closing the
  * panorama's tab leaves it, as Escape does. The window overlay reads the
- * title from `getSnapshot` to know which tabs to show.
+ * title from `getSnapshot` to know which tabs to show, and whether a panorama
+ * is on screen yet to know when to show the panorama's tab.
  */
 import { PANORAMA_SETTINGS_TAB, PANORAMA_TAB } from "../settings/catalogue/scenes";
 import type { SettingsRegistry } from "../settings/registry";
@@ -16,6 +17,12 @@ import { createParameterSection, createSectionsElement, type ParameterSectionHan
 export interface PanoramaTabsSnapshot {
   /** The panorama's tab title, "360: <title>", while one is entered or being entered; null outside one. */
   title: string | null;
+  /**
+   * Whether a panorama is on screen: false while the first is still being
+   * entered from the globe, the camera flying in; true from then on, following
+   * a link included.
+   */
+  onScreen: boolean;
 }
 
 export interface PanoramaTabs {
@@ -182,14 +189,15 @@ export function createPanoramaTabs(options: PanoramaTabsOptions): PanoramaTabs {
   }
 
   // ─── State ─────────────────────────────────────────────────────────
-  let snapshot: PanoramaTabsSnapshot = { title: null };
+  let snapshot: PanoramaTabsSnapshot = { title: null, onScreen: false };
   const listeners = new Set<() => void>();
   let rendered = "";
   const off = controller.subscribe(state => {
     const entry = panoramaOf(state.status);
     const title = entry ? `360: ${entry.title}` : null;
-    if (title !== snapshot.title) {
-      snapshot = { title };
+    const onScreen = entry !== null && state.status !== null && state.status.active !== null;
+    if (title !== snapshot.title || onScreen !== snapshot.onScreen) {
+      snapshot = { title, onScreen };
       for (const listener of [...listeners]) listener();
     }
     if (!entry || !state.status) return;
