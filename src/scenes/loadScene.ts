@@ -112,7 +112,7 @@ export interface SceneEntryStatus {
 /** Which image of the panorama on screen is shown, and why no larger one is. */
 export interface ImmersionDetailStatus {
   representation: string;
-  /** Why no larger image is on screen; null when this is the largest the panorama offers. */
+  /** Why no larger image is on screen, a limit or a failed load; null when this is the largest the panorama offers. */
   limitation: string | null;
   /** A larger or smaller image on its way to replace it, while it loads. */
   loading: string | null;
@@ -141,6 +141,22 @@ export interface SceneStatus {
   warnings: readonly SceneDiagnostic[];
   lastError: string | null;
   view: LookState | null;
+}
+
+/**
+ * Something the scene could not do, told to the host as it happens so its log
+ * can say so: the scene file, an orb's preview, entering a panorama, or a
+ * larger image of the one on screen. Cancelled work is not a failure, and
+ * neither is a larger image held back by a limit the user set.
+ */
+export interface SceneFailure {
+  kind: "scene" | "preview" | "navigation" | "image";
+  /** The panorama it concerns, if any. */
+  panorama: { id: string; title: string } | null;
+  /** What went wrong, as the network or the loader said it. */
+  cause: string;
+  /** One sentence for a log: what failed, and the cause. */
+  message: string;
 }
 
 export type SceneActionResult =
@@ -186,6 +202,8 @@ export interface LoadSceneOptions {
   applyOverview?: boolean;
   /** Browser history, the default, or another adapter; null keeps navigation in memory. */
   history?: SceneHistoryAdapter | null;
+  /** Told of each failure as it happens, for the host's log. */
+  onFailure?: (failure: SceneFailure) => void;
   /** Test seams: a renderer, a GPU backend and a frame driver. */
   internals?: {
     renderer?: SceneRenderer;
@@ -353,6 +371,11 @@ function imageName(representation: ResolvedRepresentation): string {
     : `The ${representation.width} px image`;
 }
 
+/** A cause, as the end of a sentence. */
+function sentence(text: string): string {
+  return /[.!?…]$/.test(text) ? text : `${text}.`;
+}
+
 function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, settings: SettingsRegistry, options: LoadSceneOptions): SceneHandle {
   const scene = runtime.scene;
   const engine = scene?.getEngine() ?? null;
@@ -373,6 +396,14 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   let phase: ScenePhase = "overview";
   let target: string | null = null;
   let lastError: string | null = null;
+  const report = (kind: SceneFailure["kind"], entry: Entry | null, cause: string, message: string): void => {
+    options.onFailure?.({ kind, panorama: entry ? { id: entry.record.id, title: entry.record.title } : null, cause, message });
+  };
+  /** A navigation error: shown as the scene's last error, and reported. */
+  const navigationError = (message: string): void => {
+    lastError = message;
+    report("navigation", null, message, message);
+  };
   let overviewState: SceneStatus["overview"] = current.overview && options.applyOverview !== false ? "pending" : "none";
   let appliedOverviewFov = false;
   let entries = new Map<string, Entry>();
@@ -602,11 +633,16 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return { representation: choice.representation, limitation: [outOfRange, choice.limitation].filter(Boolean).join("; ") || null };
   }
 
-  function loadPreview(entry: Entry, priority: number): void {
+  /** `reportFailure` is false when entering waits on it, since entering reports its own failure. */
+  function loadPreview(entry: Entry, priority: number, reportFailure = true): void {
     if (entry.preview.state === "loading" || entry.preview.state === "ready") return;
+    const failed = (cause: string): void => {
+      if (reportFailure) report("preview", entry, cause, `${entry.record.title}: its preview could not be loaded: ${sentence(cause)}`);
+    };
     const choice = choosePreview(entry);
     if (!choice) {
       entry.preview = { ...entry.preview, state: "failed", message: "No preview fits the panorama GPU memory (scene.panorama.sourceGpuMiB)." };
+      failed(entry.preview.message!);
       emit();
       return;
     }
@@ -627,6 +663,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     }, error => {
       if (disposed || loadingGeneration !== generation || controller.signal.aborted) return;
       entry.preview = { state: "failed", handle: null, limitation: null, message: error instanceof Error ? error.message : String(error), controller: null };
+      failed(entry.preview.message!);
       emit();
     });
   }
@@ -778,7 +815,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     if (entry.preview.state !== "ready") {
       entry.preview.controller?.abort();
       entry.preview = { ...entry.preview, state: "idle", controller: null };
-      loadPreview(entry, 10);
+      loadPreview(entry, 10, false);
     }
     while (entry.preview.state === "loading") {
       await new Promise<void>((resolve, reject) => {
@@ -790,11 +827,13 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return entry.preview.handle;
   }
 
-  function failure(error: unknown, signal: AbortSignal): SceneActionResult {
+  /** `what` failed, as in "Northrop Mall could not be entered". */
+  function failure(error: unknown, signal: AbortSignal, entry: Entry | null, what: string): SceneActionResult {
     if (disposed) return { ok: false, reason: "disposed", message: "The scene has been disposed." };
     if (signal.aborted) return { ok: false, reason: "cancelled", message: "Cancelled." };
     const message = error instanceof Error ? error.message : String(error);
     lastError = message;
+    report("navigation", entry, message, `${what}: ${sentence(message)}`);
     return { ok: false, reason: "failed", message };
   }
 
@@ -1001,7 +1040,11 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     }, error => {
       if (immersion !== state || controller.signal.aborted) return;
       if (state.refine === controller) state.refine = null;
-      state.detail = { representation: state.shown.handle.representation.id, limitation: error instanceof Error ? error.message : String(error), loading: null };
+      const cause = error instanceof Error ? error.message : String(error);
+      const failed = `${imageName(chosen)} could not be loaded: ${sentence(cause)}`;
+      state.detail = { representation: state.shown.handle.representation.id, limitation: failed, loading: null };
+      const shown = imageName(state.shown.handle.representation).toLowerCase();
+      report("image", entry, cause, `${entry.record.title}: ${imageName(chosen).toLowerCase()} could not be loaded, so ${shown} stays on screen: ${sentence(cause)}`);
       emit();
     });
   }
@@ -1025,7 +1068,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       runtime.restoreNavigationSnapshot(state.lease.overview);
       phase = "overview";
       target = null;
-      lastError = "Navigation ended: the renderer lost its device or was torn down.";
+      navigationError("Navigation ended: the renderer lost its device or was torn down.");
     }
     emit();
   }
@@ -1123,7 +1166,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         lease.release("cancelled");
       }
       if (!immersion) { phase = "overview"; target = null; }
-      const result = failure(error, signal);
+      const result = failure(error, signal, entry, `${entry.record.title} could not be entered`);
       emit();
       return result;
     } finally {
@@ -1188,7 +1231,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         phase = "immersive";
       }
       target = null;
-      const result = failure(error, signal);
+      const result = failure(error, signal, entry, `${entry.record.title} could not be entered`);
       emit();
       return result;
     } finally {
@@ -1250,7 +1293,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         return;
       }
       if (entry.revision !== current.revision) {
-        lastError = "That history entry belongs to another revision of this scene.";
+        navigationError("That history entry belongs to another revision of this scene.");
         if (immersion) void exitTo("none");
         emit();
         return;
@@ -1260,7 +1303,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         return;
       }
       const destination = entries.get(entry.destination);
-      if (!destination) { lastError = `${entry.destination} is no longer in this scene.`; emit(); return; }
+      if (!destination) { navigationError(`${entry.destination} is no longer in this scene.`); emit(); return; }
       const view = entry.view ? { headingDeg: entry.view.headingDeg, pitchDeg: entry.view.pitchDeg, verticalFovDeg: entry.view.verticalFovDeg } : undefined;
       if (immersion) void navigateWithin(destination, view, undefined, "none");
       else void enter(destination.record.id, { view }).then(result => {
@@ -1366,7 +1409,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
           });
           ground = prepared.groundHeightMeters;
         } catch (error) {
-          return failure(error, overviewOptions.signal ?? new AbortController().signal);
+          return failure(error, overviewOptions.signal ?? new AbortController().signal, null, "The scene's overview could not be shown");
         }
       }
       if (!runtime.restoreNavigationSnapshot(snapshotFromOverview(overview, ground))) return { ok: false, reason: "busy", message: "Another owner holds the camera." };

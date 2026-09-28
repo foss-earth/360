@@ -8,7 +8,7 @@ import type { PanoramaCameraFrame, PanoramaOrb } from "../engine/babylon/panoram
 import type { PanoramaGpuTexture } from "../engine/babylon/panorama/panoramaTextures";
 import { createSettingsRegistry } from "../settings/registry";
 import { FOSS_EARTH_PARAMETERS } from "../settings/catalogue";
-import { loadScene, type SceneHandle, type SceneRenderer, type SceneRuntime } from "./loadScene";
+import { loadScene, type SceneFailure, type SceneHandle, type SceneRenderer, type SceneRuntime } from "./loadScene";
 import { createMemorySceneHistory } from "./sceneHistory";
 import { enuFrame, geodeticPoint, scale, add, type Vec3 } from "./panoramaMath";
 import type { ResourceBackend } from "./panoramaResources";
@@ -116,8 +116,11 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     if (holdUploads) pendingUploads.push(() => resolve(texture(kind)));
     else resolve(texture(kind));
   });
+  let failing: RegExp | null = null;
+  const failures: SceneFailure[] = [];
   const backend: ResourceBackend<PanoramaGpuTexture> = {
     async fetch(url) {
+      if (failing?.test(url)) throw new TypeError("Failed to fetch");
       return new Response(readFileSync(path.join(PUBLIC, new URL(url).pathname)), { headers: { "content-type": "image/jpeg" } });
     },
     async decode() { return { width: 1, height: 1, close() {} } as unknown as ImageBitmap; },
@@ -130,14 +133,16 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   const history = createMemorySceneHistory();
 
   const load = (reduced = false, document: Record<string, unknown> = manifest) => loadScene(runtime, document, {
-    baseUrl: MANIFEST_URL, settings, history,
+    baseUrl: MANIFEST_URL, settings, history, onFailure: failure => failures.push(failure),
     internals: {
       renderer, backend, now: () => clock, reducedMotion: () => reduced,
       onFrame: callback => { frameCallbacks.add(callback); return () => frameCallbacks.delete(callback); },
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, textures, history, settings,
+    load, tick, runtime, owner, orbs, shown, restored, textures, history, settings, failures,
+    /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
+    failFetches: (pattern: RegExp | null) => { failing = pattern; },
     presentation: () => presentation,
     continuous: () => continuous,
     setGround: (ready: boolean) => { groundReady = ready; },
@@ -346,6 +351,48 @@ describe("loadScene", () => {
     h.settings.set("scene.panorama.sourceGpuMiB", 64);
     await settle(h, 40);
     expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
+  });
+
+  it("reports a larger image that fails to load, keeps the one on screen, and says why in the detail", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    // The server stops after the previews arrived, as when the dev server is closed.
+    h.failFetches(/immersion-/);
+    const entering = handle.enter(entry.id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    const url = new URL("media/cardinal-grid/immersion-2048.jpg", new URL("umn-cardinal.scene.json", MANIFEST_URL)).href;
+    expect(handle.status.immersionDetail).toEqual({
+      representation: expect.stringMatching(/^preview-/), loading: null,
+      limitation: `The 2048 px image could not be loaded: ${url} could not be fetched: Failed to fetch.`,
+    });
+    expect(h.failures).toEqual([{
+      kind: "image", panorama: { id: entry.id, title: entry.title },
+      cause: `${url} could not be fetched: Failed to fetch`,
+      message: expect.stringMatching(new RegExp(`^${entry.title}: the 2048 px image could not be loaded, so the \\d+ px preview cube stays on screen: ${url.replace(/[.?]/g, "\\$&")} could not be fetched: Failed to fetch\\.$`)),
+    }]);
+    // Loading again once the server is back.
+    h.failFetches(null);
+    h.settings.set("scene.panorama.immersionWidth", 2048);
+    await settle(h, 40);
+    expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
+    expect(h.failures).toHaveLength(1);
+  });
+
+  it("reports an orb's preview that fails in the background, and entering it once, not twice", async () => {
+    const h = harness();
+    h.failFetches(/preview-/);
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    expect(entry.preview).toBe("failed");
+    expect(h.failures.map(failure => [failure.kind, failure.panorama?.id])).toEqual([["preview", entry.id]]);
+    expect(h.failures[0].message).toMatch(new RegExp(`^${entry.title}: its preview could not be loaded: .+ could not be fetched: Failed to fetch\\.$`));
+    expect(await handle.enter(entry.id)).toMatchObject({ ok: false, reason: "failed" });
+    expect(h.failures.map(failure => failure.kind)).toEqual(["preview", "navigation"]);
+    expect(h.failures[1].message).toMatch(new RegExp(`^${entry.title} could not be entered: .+ could not be fetched: Failed to fetch\\.$`));
   });
 
   it("follows a link, keeps the original overview, and Back from B returns to A", async () => {
