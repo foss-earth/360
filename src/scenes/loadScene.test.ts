@@ -3,14 +3,15 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BaseTexture } from "@babylonjs/core";
-import { createNavigationOwner, type NavigationPresentation, type NavigationSnapshot } from "../engine/babylon/navigationLease";
+import { createNavigationOwner, type NavigationLease, type NavigationPresentation, type NavigationSnapshot } from "../engine/babylon/navigationLease";
 import type { PanoramaCameraFrame, PanoramaOrb } from "../engine/babylon/panorama/panoramaRenderer";
 import type { PanoramaGpuTexture } from "../engine/babylon/panorama/panoramaTextures";
 import { createSettingsRegistry } from "../settings/registry";
 import { FOSS_EARTH_PARAMETERS } from "../settings/catalogue";
 import { loadScene, type SceneFailure, type SceneHandle, type SceneRenderer, type SceneRuntime } from "./loadScene";
 import { createMemorySceneHistory } from "./sceneHistory";
-import { enuFrame, geodeticPoint, scale, add, type Vec3 } from "./panoramaMath";
+import { enuFrame, geodeticPoint, scale, add, sub, length, dot, vec3, type Vec3 } from "./panoramaMath";
+import { INSIDE_SHARE, orbitAngles } from "./panoramaFlight";
 import type { ResourceBackend } from "./panoramaResources";
 
 const GROUND = 250;
@@ -21,7 +22,7 @@ const manifest = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-sc
 // One panorama with previews up to 256 px faces and whole images 1024 and 2048 px wide, in the same folder.
 const cardinal = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-scenes/umn-cardinal.scene.json"), "utf8")) as Record<string, unknown>;
 
-function harness(options: { available?: boolean; groundReady?: boolean; canvas?: HTMLCanvasElement } = {}) {
+function harness(options: { available?: boolean; groundReady?: boolean; canvas?: HTMLCanvasElement; placeCamera?: boolean } = {}) {
   let clock = 0;
   const frameCallbacks = new Set<() => void>();
   const tick = (ms = 16) => { clock += ms; for (const callback of [...frameCallbacks]) callback(); };
@@ -29,6 +30,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   let presentation: NavigationPresentation | null = null;
   let continuous = 0;
   const restored: NavigationSnapshot[] = [];
+  const placed: NavigationPresentation[] = [];
   const snapshot: NavigationSnapshot = {
     version: 1, view: { latDeg: 44.97, lonDeg: -93.26, headingDeg: 0, pitchDeg: 60, zoomMeters: 600 },
     camera: { center: { x: 1, y: 2, z: 3 }, yaw: 0, pitch: 1, radius: 600, fov: 0.8 },
@@ -58,6 +60,14 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
       restored.push(value);
       return true;
     },
+    // A runtime that can put its camera anywhere while a lease holds it, when a test asks for one.
+    ...(!options.placeCamera ? {} : {
+      placeNavigationCamera: (lease: NavigationLease, view: NavigationPresentation) => {
+        if (owner.current() !== lease) return false;
+        placed.push(view);
+        return true;
+      },
+    }),
     getPresentationView: () => owner.current()?.getPresentationView() ?? null,
     setNavigationIntentHandler: () => () => {},
     requestRender: () => {},
@@ -140,7 +150,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, textures, history, settings, failures,
+    load, tick, runtime, owner, orbs, shown, restored, placed, textures, history, settings, failures,
     /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
     failFetches: (pattern: RegExp | null) => { failing = pattern; },
     presentation: () => presentation,
@@ -191,8 +201,9 @@ describe("loadScene", () => {
     expect(h.orbs.get("pair-photo")!.state.marker).not.toBeNull();
   });
 
-  it("enters through an expanding reveal, hands off with the camera's own view, and exits to the overview it left", async () => {
-    const h = harness();
+  it("without the flight, enters through an expanding reveal, hands off with the camera's own view, and exits to the overview it left", async () => {
+    const h = harness({ placeCamera: true });
+    h.settings.set("scene.panorama.flightDuration", "off");
     const handle = await loaded(h);
     handles.push(handle);
     const entering = handle.enter("pair-photo");
@@ -218,6 +229,129 @@ describe("loadScene", () => {
     expect(h.restored.at(-1)).toBe(overviewBefore);
     expect(h.shown.at(-1)).toBeNull();
     expect(h.continuous()).toBe(0);
+    expect(h.placed).toHaveLength(0);
+  });
+
+  it("flies the camera into the orb and hands off inside it, then pulls back out facing the way the view faces", async () => {
+    const h = harness({ placeCamera: true });
+    const handle = await loaded(h);
+    handles.push(handle);
+    const photo = h.orbs.get("pair-photo")!;
+    const entering = handle.enter("pair-grid");
+    await settle(h, 80);
+    expect(await entering).toEqual({ ok: true });
+    const grid = h.orbs.get("pair-grid")!;
+    const marker = grid.state.marker as Vec3;
+    // From the camera's own eye, 100 m south, straight to half the orb's radius inside it.
+    const into = [...h.placed];
+    const distance = (view: NavigationPresentation, to: Vec3) => length(sub(to, vec3(view.position)));
+    expect(into.length).toBeGreaterThan(3);
+    expect(distance(into[0], marker)).toBeGreaterThan(90);
+    expect(distance(into.at(-1)!, marker)).toBeCloseTo(2 * INSIDE_SHARE, 6);
+    for (let i = 1; i < into.length; i++) expect(distance(into[i], marker)).toBeLessThanOrEqual(distance(into[i - 1], marker));
+    // A sphere of the orb's size when the flight began, revealed over everything as the camera arrives.
+    const inward = grid.expansions.filter(Boolean) as { radiusMeters: number; reveal: number; source?: unknown }[];
+    expect(new Set(inward.map(each => each.radiusMeters))).toEqual(new Set([2]));
+    expect(inward.at(-1)!.reveal).toBe(1);
+    expect(grid.expansions.at(-1)).toBeNull();
+    expect(h.presentation()).not.toBeNull();
+    expect(handle.status.phase).toBe("immersive");
+
+    // Turned to face east by a link, into the other orb.
+    const following = handle.follow("to-photo-facing-east");
+    await settle(h, 40);
+    expect(await following).toEqual({ ok: true });
+    const overview = h.owner.current()!.overview;
+    h.placed.length = 0;
+    const exiting = handle.exit();
+    expect(handle.exit()).toBe(exiting);
+    await settle(h, 80);
+    expect(await exiting).toEqual({ ok: true });
+    const out = [...h.placed];
+    const photoMarker = photo.state.marker as Vec3;
+    const outward = photo.expansions.filter(Boolean) as { radiusMeters: number; reveal: number; source?: unknown }[];
+    const radius = outward[0].radiusMeters;
+    // Starts inside the sphere, drawing the image on screen over everything, not the orb's preview, with the view's own look.
+    expect(distance(out[0], photoMarker)).toBeCloseTo(radius * INSIDE_SHARE, 6);
+    expect(outward[0]).toMatchObject({ reveal: 1, source: expect.objectContaining({ kind: "equirectangular" }) });
+    expect(outward.at(-1)!.reveal).toBe(0);
+    expect(new Set(outward.map(each => each.radiusMeters)).size).toBe(1);
+    expect(photo.expansions.at(-1)).toBeNull();
+    const east = enuFrame(-93.235, 44.974).east;
+    expect(dot(vec3(out[0].forward), east)).toBeCloseTo(1, 6);
+    // Ends as the globe camera's orbit of the orb: still facing east, at the overview's pitch, distance and field of view.
+    const end = h.restored.at(-1)!;
+    expect(end).not.toBe(overview);
+    expect(vec3(end.camera.center)).toEqual(photoMarker);
+    expect(end.camera).toMatchObject({ pitch: overview.camera.pitch, radius: overview.camera.radius, fov: overview.camera.fov });
+    expect(orbitAngles(photoMarker, vec3(out.at(-1)!.forward), 0).yaw).toBeCloseTo(end.camera.yaw, 9);
+    expect(end.camera.yaw).toBeCloseTo(Math.PI / 2, 2);
+    expect(distance(out.at(-1)!, photoMarker)).toBeCloseTo(overview.camera.radius, 6);
+    expect(handle.status.phase).toBe("overview");
+    expect(h.presentation()).toBeNull();
+    expect(h.shown.at(-1)).toBeNull();
+    expect(h.owner.current()).toBeNull();
+    expect(h.continuous()).toBe(0);
+  });
+
+  it("ends the flight out at once on Escape, and a Back during it joins the exit", async () => {
+    const h = harness({ placeCamera: true });
+    const handle = await loaded(h);
+    handles.push(handle);
+    const entering = handle.enter("pair-photo");
+    await settle(h, 80);
+    await entering;
+    const exiting = handle.exit();
+    await settle(h, 5);
+    expect(handle.status.phase).toBe("exiting");
+    // Links are not followed on the way out.
+    expect(await handle.follow("to-grid")).toMatchObject({ ok: false, reason: "unavailable" });
+    const placedBefore = h.placed.length;
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    h.history.back();
+    await settle(h, 2);
+    expect(await exiting).toEqual({ ok: true });
+    expect(handle.status.phase).toBe("overview");
+    // No more of the flight after Escape; the camera is at its end.
+    expect(h.placed.length).toBe(placedBefore);
+    expect(h.restored.at(-1)!.camera.radius).toBe(600);
+    expect(h.owner.current()).toBeNull();
+    expect(h.continuous()).toBe(0);
+  });
+
+  it("completes an exit whose flight the runtime ends, at the overview it left", async () => {
+    const h = harness({ placeCamera: true });
+    const handle = await loaded(h);
+    handles.push(handle);
+    const entering = handle.enter("pair-photo");
+    await settle(h, 80);
+    await entering;
+    const overview = h.owner.current()!.overview;
+    const exiting = handle.exit();
+    await settle(h, 5);
+    h.loseDevice();
+    await flush();
+    expect(await exiting).toEqual({ ok: true });
+    expect(handle.status.phase).toBe("overview");
+    expect(h.restored.at(-1)).toBe(overview);
+    expect(h.orbs.get("pair-photo")!.expansions.at(-1)).toBeNull();
+  });
+
+  it("keeps the reveal and the fade when the runtime cannot move its camera or motion is reduced", async () => {
+    for (const [options, reduced] of [[{}, false], [{ placeCamera: true }, true]] as const) {
+      const h = harness(options);
+      const handle = await loaded(h, reduced);
+      handles.push(handle);
+      const entering = handle.enter("pair-photo");
+      await settle(h, 40);
+      expect(await entering).toEqual({ ok: true });
+      const overview = h.owner.current()!.overview;
+      const exiting = handle.exit();
+      await settle(h, 20);
+      await exiting;
+      expect(h.placed).toHaveLength(0);
+      expect(h.restored.at(-1)).toBe(overview);
+    }
   });
 
   it("draws the scene's outline, grows a hovered orb to its hover scale and back, and resets it on entering", async () => {

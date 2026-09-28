@@ -84,16 +84,18 @@ export interface OrbState {
 }
 
 export interface OrbExpansion {
-  /** The virtual radius the overlay draws with, metres. */
+  /** The virtual radius the orb and its overlay draw with, metres. */
   radiusMeters: number;
   /** 0: clipped by terrain like the orb; 1: drawn over everything. */
   reveal: number;
+  /** The image the overlay draws instead of the orb's preview, as a flight out of the panorama on screen starts from it. */
+  source?: ImmersionSource | null;
 }
 
 export interface PanoramaOrb {
   readonly id: string;
   update(state: Partial<OrbState>): void;
-  /** Draws the expanding entry overlay, or stops it with null. */
+  /** Draws the orb as a sphere of the expansion's radius, with its overlay over everything, or stops with null. */
   setExpansion(expansion: OrbExpansion | null): void;
   /** The radius used this frame for silhouette, depth and picking. */
   effectiveRadius(frame?: PanoramaCameraFrame): number | null;
@@ -368,10 +370,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const material = new ShaderMaterial(name, scene, { vertexSource: ORB_VERTEX, fragmentSource: ORB_FRAGMENT }, {
       attributes: ["position"],
       uniforms: [...ORB_UNIFORMS],
-      samplers: ["panoramaCube"],
+      samplers: ["panoramaCube", "panoramaEquirect"],
       defines,
       shaderLanguage: ShaderLanguage.WGSL,
-      needAlphaBlending: !defines.length,
+      needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
     });
     material.backFaceCulling = false;
     if (reveal) {
@@ -388,7 +390,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     revealMesh: Mesh;
     material: ShaderMaterial;
     revealMaterial: ShaderMaterial;
-    applyUniforms(material: ShaderMaterial, uniforms: PanoramaCameraFrame, radius: number, opacity: number): boolean;
+    /** The overlay's material for an equirectangular source, made when one is first drawn. */
+    revealEquirectMaterial: ShaderMaterial | null;
+    /** Draws the orb's preview, or `source` in its place. */
+    applyUniforms(material: ShaderMaterial, uniforms: PanoramaCameraFrame, radius: number, opacity: number, source?: ImmersionSource | null): boolean;
     /** The radius drawn at `distance` in `frame`: the screen-size bounds, then the display scale. */
     drawnRadius(distance: number, frame: PanoramaCameraFrame): number;
   }
@@ -428,7 +433,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       revealMesh,
       material,
       revealMaterial,
-      applyUniforms(target, uniforms, radius, opacity) {
+      revealEquirectMaterial: null,
+      applyUniforms(target, uniforms, radius, opacity, source) {
         const marker = orb.state.marker;
         if (!marker) return false;
         const rel = sub(marker, uniforms.eye);
@@ -448,8 +454,9 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         const [r, g, b, a] = outline?.color ?? [0, 0, 0, 0];
         target.setColor4("outlineColor", outlineColor.set(r, g, b, a));
         target.setFloat("outlineWidth", (outline?.widthPx ?? 0) * devicePerCss);
-        applyContent(target, orb.state.content);
-        target.setTexture("panoramaCube", orb.state.texture ?? placeholder!);
+        applyContent(target, source?.content ?? orb.state.content);
+        if (source?.kind === "equirectangular") target.setTexture("panoramaEquirect", source.texture);
+        else target.setTexture("panoramaCube", source?.texture ?? orb.state.texture ?? placeholder!);
         return true;
       },
       update(state) {
@@ -460,7 +467,11 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       },
       setExpansion(expansion) {
         orb.expansion = expansion;
-        revealMesh.setEnabled(expansion !== null && orb.state.marker !== null && orb.state.texture !== null);
+        if (expansion?.source?.kind === "equirectangular") {
+          orb.revealEquirectMaterial ??= orbMaterial(`panorama-orb-reveal-equirect-material-${id}`, ["#define SOURCE_EQUIRECT"], true);
+          revealMesh.material = orb.revealEquirectMaterial;
+        } else revealMesh.material = revealMaterial;
+        revealMesh.setEnabled(expansion !== null && orb.state.marker !== null && (expansion.source?.texture ?? orb.state.texture) !== null);
         options.requestRender();
       },
       drawnRadius(distance, frame) {
@@ -479,19 +490,22 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         revealMesh.dispose();
         material.dispose();
         revealMaterial.dispose();
+        orb.revealEquirectMaterial?.dispose();
         options.requestRender();
       },
     };
     const observer: Observer<Mesh> | null = mesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames) return;
-      const radius = orb.drawnRadius(length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms);
+      // Expanding, the orb is the sphere itself, clipped by terrain where its overlay has not yet revealed it.
+      const radius = orb.expansion?.radiusMeters ?? orb.drawnRadius(length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms);
       if (orb.applyUniforms(material, frames.uniforms, radius, 1)) record(`orb:${id}`, frames.current, frames.uniforms);
     }));
     const revealObserver: Observer<Mesh> | null = revealMesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames || !orb.expansion) return;
-      if (orb.applyUniforms(revealMaterial, frames.uniforms, orb.expansion.radiusMeters, orb.expansion.reveal)) record(`reveal:${id}`, frames.current, frames.uniforms);
+      const target = orb.expansion.source?.kind === "equirectangular" ? orb.revealEquirectMaterial! : revealMaterial;
+      if (orb.applyUniforms(target, frames.uniforms, orb.expansion.radiusMeters, orb.expansion.reveal, orb.expansion.source)) record(`reveal:${id}`, frames.current, frames.uniforms);
     }));
     orbs.set(id, orb);
     orb.update({});

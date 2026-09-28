@@ -8,13 +8,16 @@
  *                 ↓           ↓
  *               cancel → prior usable view
  *   immersive → preparing destination → entering destination → immersive
+ *
+ * With `scene.panorama.flightDuration`, entering flies the globe camera into
+ * the orb and exiting pulls it back out (panoramaFlight.ts).
  */
 import type { Scene } from "@babylonjs/core";
 import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
 import type { BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import type { FrameProfiler } from "../perf/frameProfiler";
-import type { NavigationLease, NavigationPresentation } from "../engine/babylon/navigationLease";
-import { createPanoramaRenderer, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
+import type { NavigationLease, NavigationPresentation, NavigationSnapshot } from "../engine/babylon/navigationLease";
+import { createPanoramaRenderer, effectiveOrbRadius, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
 import { createPanoramaUploader, isWebGpuEngine, type PanoramaGpuTexture, type PanoramaUploader } from "../engine/babylon/panorama/panoramaTextures";
 import { getAppSettings } from "../settings/appSettings";
 import type { SettingsRegistry } from "../settings/registry";
@@ -28,6 +31,7 @@ import {
   captureRelativeMarker,
   contentMatrix,
   DEG_TO_RAD,
+  ecef,
   enuFrame,
   expansionTargetRadius,
   groundQueryPoint,
@@ -39,10 +43,12 @@ import {
   previewFaceTexels,
   scale,
   sub,
+  vec3,
   type EnuFrame,
   type Mat3,
   type Vec3,
 } from "./panoramaMath";
+import { flightIn, flightOut, poseView, type Flight, type FlightPose } from "./panoramaFlight";
 import { createPanoramaResources, resourceSettingsFrom, ResourceRefusal, type ResourceBackend, type SourceHandle } from "./panoramaResources";
 import { createBrowserSceneHistory, type SceneHistoryAdapter, type SceneHistoryEntry } from "./sceneHistory";
 import { interpolateView, presentationFromView, snapshotFromOverview, viewFromPresentation, type GeoView } from "./sceneView";
@@ -65,7 +71,7 @@ const DECODE_WALL_SECTION = "background/panorama decode";
 export type SceneRuntime = Pick<BabylonRuntime,
   | "surface" | "acquireNavigation" | "captureNavigationSnapshot" | "restoreNavigationSnapshot"
   | "getPresentationView" | "setNavigationIntentHandler" | "requestRender" | "beginContinuous" | "endContinuous"
-  | "onDeviceLost" | "onDeviceRestored" | "prepareTerrain"> & Partial<Pick<BabylonRuntime, "getInputMode">> & {
+  | "onDeviceLost" | "onDeviceRestored" | "prepareTerrain"> & Partial<Pick<BabylonRuntime, "getInputMode" | "placeNavigationCamera">> & {
     scene?: Scene;
     /** Where the scene's own frame work is timed, when the runtime profiles. */
     frameProfile?: { profiler: FrameProfiler };
@@ -343,6 +349,8 @@ interface Immersion {
   offLeaseAbort: () => void;
   /** Stops stepping held keys, sticks and a glide. */
   stopLook: () => void;
+  /** Set once exiting begins: the view no longer follows the look. */
+  leaving: boolean;
   session: string;
 }
 
@@ -423,6 +431,14 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   const reducedMotion = options.internals?.reducedMotion ?? (() => settings.get("scene.panorama.reducedMotion") === "reduce"
     || (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches));
   const previewHalfAngle = () => (num("scene.panorama.previewFov") * DEG_TO_RAD) / 2;
+  /** How long the camera flies into and out of an orb, ms: 0 when it is off, motion is reduced or the runtime cannot move its camera. */
+  const flightDuration = (): number => {
+    const value = settings.get("scene.panorama.flightDuration");
+    return typeof value === "number" && value > 0 && !reducedMotion() && runtime.placeNavigationCamera ? value : 0;
+  };
+  const placeCamera = (lease: NavigationLease, pose: FlightPose): void => {
+    runtime.placeNavigationCamera?.(lease, { position: ecef(pose.position), forward: ecef(pose.forward), up: ecef(pose.up), verticalFovRad: pose.verticalFovRad });
+  };
   const devicePixelsPerCss = () => (engine ? 1 / engine.getHardwareScalingLevel() : 1);
   const lookSettings = (): LookSettings => ({
     dragSensitivity: num("scene.panorama.dragSensitivity"),
@@ -847,7 +863,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const self: { state: Immersion | null } = { state: null };
     const look = createLookModel({ headingDeg: view.headingDeg, pitchDeg: view.pitchDeg, verticalFovDeg: view.verticalFovDeg }, lookSettings, next => {
       const state = self.state;
-      if (!state || immersion !== state) return;
+      if (!state || immersion !== state || state.leaving) return;
       lease.setPresentationView(presentation(state.shown.entry, geoView(next, state.roll)));
       scheduleLookHistory();
       emit();
@@ -892,7 +908,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     lease.signal.addEventListener("abort", onLeaseAbort, { once: true });
     const state: Immersion = {
       lease, id: entry.record.id, shown: { handle, entry }, detail, refine: null, look, roll: view.rollDeg, input, offIntents,
-      offLeaseAbort: () => lease.signal.removeEventListener("abort", onLeaseAbort), stopLook, session,
+      offLeaseAbort: () => lease.signal.removeEventListener("abort", onLeaseAbort), stopLook, leaving: false, session,
     };
     self.state = state;
     return state;
@@ -942,7 +958,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       }, controller.signal, state.lease);
     } catch {
       // Cancelled by looking: keep the current view, level the roll only.
-      if (immersion === state && state.roll !== 0) {
+      if (immersion === state && !state.leaving && state.roll !== 0) {
         state.roll = 0;
         state.look.set(state.look.get());
       }
@@ -1049,16 +1065,21 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     });
   }
 
-  function teardownImmersion(reason: "exit" | "lease" | "dispose"): void {
-    const state = immersion;
-    if (!state) return;
-    immersion = null;
+  /** Stops everything that moves the view: looking, levelling, and a sharper image's crossfade. */
+  function silence(state: Immersion): void {
     arrival?.abort();
     arrival = null;
     state.refine?.abort();
     state.input.detach();
     state.stopLook();
     state.offIntents();
+  }
+
+  function teardownImmersion(reason: "exit" | "lease" | "dispose"): void {
+    const state = immersion;
+    if (!state) return;
+    immersion = null;
+    silence(state);
     state.offLeaseAbort();
     renderer.immersion.show(null);
     if (state.shown.handle !== state.shown.entry.preview.handle) state.shown.handle.release();
@@ -1078,6 +1099,12 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const entry = entries.get(id);
     if (!entry) return { ok: false, reason: "unavailable", message: current.unsupported.get(id)?.reason ?? `No panorama ${id} in this scene.` };
     if (!renderer.available) return { ok: false, reason: "unavailable", message: renderer.unavailableReason ?? "Panoramas cannot be drawn here." };
+    if (exiting) {
+      // Entering cuts an exit short: it completes at once, then this entry begins from where it ended.
+      operation?.abort(new DOMException("Replaced by another navigation.", "AbortError"));
+      await exiting;
+      if (disposed) return { ok: false, reason: "disposed", message: "The scene has been disposed." };
+    }
     if (immersion) return navigateWithin(entry, enterOptions.view, enterOptions.signal, "push");
     const op = beginOperation(enterOptions.signal);
     const { signal } = op;
@@ -1087,6 +1114,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     emit();
     let lease: NavigationLease | null = null;
     const stopCancelling = typeof window !== "undefined" ? cancelOnInput(op) : () => {};
+    // The runtime ending the lease (device loss, teardown) ends the entry too.
+    const endWithLease = (): void => op.abort(new DOMException("Navigation ended.", "AbortError"));
     try {
       const handle = await ensurePreview(entry, signal);
       if (signal.aborted) throw signal.reason;
@@ -1098,6 +1127,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         return { ok: false, reason: acquired.reason === "aborted" ? "cancelled" : "busy", message: acquired.message };
       }
       lease = acquired.lease;
+      lease.signal.addEventListener("abort", endWithLease, { once: true });
       phase = "entering";
       entry.placement.frozen = true;
       emit();
@@ -1112,7 +1142,12 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       const source = sourceOf(entry, handle);
       const marker = entry.placement.marker;
       const betaR = previewHalfAngle();
-      const expansion = marker && entry.placement.state === "placed" && !reducedMotion()
+      const held = acquired.lease;
+      const flightMs = marker && entry.placement.state === "placed" ? flightDuration() : 0;
+      const flight = marker && flightMs > 0
+        ? flightIn({ position: frame.eye, forward: frame.view.forward, up: frame.view.up, verticalFovRad: frame.view.verticalFovRad }, marker, entry.orb.effectiveRadius(frame) ?? entry.record.marker.radiusMeters ?? 1)
+        : null;
+      const expansion = !flight && marker && entry.placement.state === "placed" && !reducedMotion()
         ? (() => {
           const rel = sub(marker, frame.eye);
           const distance = length(rel);
@@ -1122,7 +1157,21 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
           return radius === null ? null : { rel, distance, startRadius, radius };
         })()
         : null;
-      if (expansion) {
+      if (flight && marker) {
+        // Fly the globe camera into the orb, a sphere of its size on screen when the flight began, until it is inside it.
+        await animate(flightMs, t => {
+          const eased = smooth(t);
+          placeCamera(held, flight.pose(eased));
+          entry.orb.setExpansion({ radiusMeters: flight.radiusMeters, reveal: eased });
+        }, signal, held);
+        const end = flight.pose(1);
+        if (!handoffReady(orbGeometry(sub(marker, end.position), flight.radiusMeters), poseView(end, frame.view.aspect), betaR)) throw new Error("The flight did not end inside the orb; this is a defect.");
+        // Handoff: inside the sphere every ray shows the image itself, so the fullscreen image equals the orb's last frame.
+        incoming = viewFromPresentation(entry.frame, { position: ecef(end.position), forward: ecef(end.forward), up: ecef(end.up), verticalFovRad: end.verticalFovRad });
+        renderer.immersion.show({ source });
+        lease.setPresentationView(presentation(entry, incoming));
+        entry.orb.setExpansion(null);
+      } else if (expansion) {
         // Grow a virtual sphere about the fixed marker until it covers the view and its rays equal the view's.
         await animate(num("scene.panorama.expandDuration"), t => {
           const eased = smooth(t);
@@ -1171,6 +1220,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       return result;
     } finally {
       stopCancelling();
+      lease?.signal.removeEventListener("abort", endWithLease);
       if (operation === op) operation = null;
     }
   }
@@ -1242,7 +1292,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   async function follow(linkId: string, followOptions: { signal?: AbortSignal } = {}): Promise<SceneActionResult> {
     if (disposed) return { ok: false, reason: "disposed", message: "The scene has been disposed." };
     const state = immersion;
-    if (!state) return { ok: false, reason: "unavailable", message: "Links are followed from inside a panorama." };
+    if (!state || state.leaving) return { ok: false, reason: "unavailable", message: "Links are followed from inside a panorama." };
     const link = state.shown.entry.record.links.find(each => each.id === linkId);
     if (!link) return { ok: false, reason: "unavailable", message: `No link ${linkId} here.` };
     const destination = entries.get(link.target);
@@ -1250,28 +1300,92 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return navigateWithin(destination, link.arrivalView, followOptions.signal, "push");
   }
 
-  async function exitTo(historyMode: "push" | "none"): Promise<SceneActionResult> {
-    if (disposed) return { ok: false, reason: "disposed", message: "The scene has been disposed." };
+  /** The exit under way, which a second exit joins rather than repeats. */
+  let exiting: Promise<SceneActionResult> | null = null;
+
+  function exitTo(historyMode: "push" | "none"): Promise<SceneActionResult> {
+    if (disposed) return Promise.resolve({ ok: false, reason: "disposed", message: "The scene has been disposed." });
+    if (exiting) return exiting;
     if (!immersion) {
       // Escape during preparation or entry cancels it.
-      if (operation) { operation.abort(new DOMException("Cancelled.", "AbortError")); return { ok: true }; }
-      return { ok: true };
+      operation?.abort(new DOMException("Cancelled.", "AbortError"));
+      return Promise.resolve({ ok: true });
     }
-    const state = immersion;
+    const run = leave(immersion, historyMode).finally(() => { if (exiting === run) exiting = null; });
+    exiting = run;
+    return run;
+  }
+
+  /**
+   * The flight out of the panorama on screen: from inside its orb's sphere,
+   * which shows the image on screen with the view's own rays, to the view
+   * that keeps the heading and looks back at the orb with the overview's
+   * pitch, distance and field of view. Null when the flight is off, the orb
+   * has no place, or the handoff would not be exact: then the image fades.
+   */
+  function exitFlight(state: Immersion, view: NavigationPresentation): (Flight & { end: NavigationSnapshot; ms: number }) | null {
+    const ms = flightDuration();
+    const entry = state.shown.entry;
+    const marker = entry.placement.marker;
+    const frame = renderer.cameraFrame(view);
+    if (!(ms > 0) || !marker || entry.placement.state !== "placed" || !frame) return null;
+    const overview = state.lease.overview.camera;
+    // The orb's own size on screen where the flight ends, so the sphere becomes the orb there.
+    const radius = effectiveOrbRadius(
+      entry.record.marker.radiusMeters ?? num("scene.panorama.markerRadiusMeters"), overview.radius,
+      { view: { ...frame.view, verticalFovRad: overview.fov }, viewportHeightCssPx: frame.viewportHeightCssPx }, range("scene.panorama.markerDiameter"),
+    );
+    const flight = flightOut({ forward: vec3(view.forward), up: vec3(view.up), verticalFovRad: view.verticalFovRad }, marker, radius, overview);
+    if (!flight) return null;
+    const start = flight.pose(0);
+    if (!handoffReady(orbGeometry(sub(marker, start.position), radius), poseView(start, frame.view.aspect), previewHalfAngle())) return null;
+    return { ...flight, ms };
+  }
+
+  async function leave(state: Immersion, historyMode: "push" | "none"): Promise<SceneActionResult> {
     const op = beginOperation();
     phase = "exiting";
+    state.leaving = true;
+    silence(state);
     emit();
-    const view = presentation(state.shown.entry, geoView(state.look.get(), state.roll));
-    const source = sourceOf(state.shown.entry, state.shown.handle);
-    // Back to the saved overview first, then the image fades off it.
-    runtime.restoreNavigationSnapshot(state.lease.overview, state.lease);
-    state.lease.setPresentationView(null);
-    const fade = reducedMotion() ? num("scene.panorama.reducedFadeDuration") : num("scene.panorama.fadeDuration");
+    const entry = state.shown.entry;
+    const view = presentation(entry, geoView(state.look.get(), state.roll));
+    const source = sourceOf(entry, state.shown.handle);
+    const flight = exitFlight(state, view);
+    // As during entry, Escape, a press or a wheel end the animation at once; so does the runtime ending the lease.
+    const stopCancelling = typeof window !== "undefined" ? cancelOnInput(op) : () => {};
+    const endWithLease = (): void => op.abort(new DOMException("Navigation ended.", "AbortError"));
+    state.lease.signal.addEventListener("abort", endWithLease, { once: true });
     try {
-      await animate(fade, t => renderer.immersion.show({ source, opacity: 1 - smooth(t), view }), op.signal, state.lease);
+      if (flight) {
+        // Handoff: inside the sphere the orb shows the image on screen with the view's own rays, so its first frame equals the image's last.
+        placeCamera(state.lease, flight.pose(0));
+        entry.orb.setExpansion({ radiusMeters: flight.radiusMeters, reveal: 1, source });
+        state.lease.setPresentationView(null);
+        renderer.immersion.show(null);
+        await animate(flight.ms, t => {
+          const eased = smooth(t);
+          placeCamera(state.lease, flight.pose(eased));
+          entry.orb.setExpansion({ radiusMeters: flight.radiusMeters, reveal: 1 - eased, source });
+        }, op.signal, state.lease);
+      } else {
+        // Back to the saved overview first, then the image fades off it.
+        runtime.restoreNavigationSnapshot(state.lease.overview, state.lease);
+        state.lease.setPresentationView(null);
+        const fade = reducedMotion() ? num("scene.panorama.reducedFadeDuration") : num("scene.panorama.fadeDuration");
+        await animate(fade, t => renderer.immersion.show({ source, opacity: 1 - smooth(t), view }), op.signal, state.lease);
+      }
     } catch {
-      // Exit completes regardless.
+      // Cut short: the exit completes at once, where the animation would have ended.
+    } finally {
+      stopCancelling();
+      state.lease.signal.removeEventListener("abort", endWithLease);
     }
+    if (flight && entries.get(entry.record.id) === entry) entry.orb.setExpansion(null);
+    if (operation === op) operation = null;
+    // Replaced, disposed or ended by the runtime meanwhile, which put the camera back itself.
+    if (immersion !== state) return { ok: true };
+    if (flight) runtime.restoreNavigationSnapshot(flight.end, state.lease);
     const focus = state.lease.focusReturn;
     teardownImmersion("exit");
     state.lease.release("exit");
@@ -1279,7 +1393,6 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     target = null;
     if (historyMode === "push") recordHistory("push");
     if (focus instanceof HTMLElement && focus.isConnected) focus.focus();
-    if (operation === op) operation = null;
     emit();
     return { ok: true };
   }
@@ -1305,7 +1418,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       const destination = entries.get(entry.destination);
       if (!destination) { navigationError(`${entry.destination} is no longer in this scene.`); emit(); return; }
       const view = entry.view ? { headingDeg: entry.view.headingDeg, pitchDeg: entry.view.pitchDeg, verticalFovDeg: entry.view.verticalFovDeg } : undefined;
-      if (immersion) void navigateWithin(destination, view, undefined, "none");
+      if (immersion && !exiting) void navigateWithin(destination, view, undefined, "none");
       else void enter(destination.record.id, { view }).then(result => {
         // enter pushes on commit; a history-driven entry replaces instead.
         if (result.ok) recordHistory("replace");

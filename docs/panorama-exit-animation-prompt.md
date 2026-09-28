@@ -1,5 +1,10 @@
 # Work prompt: pull out of a panorama when leaving it
 
+Status: done on 2026-09-27, as a flight in both directions: the user asked for the camera itself
+to move into the image and back out. What was built, and where Exit ends and why, is in
+[panorama scenes → Flying in and out](proposals/panorama-scenes.md#stage-1-as-built).
+Do not execute it again.
+
 Execute this task when the user starts a fresh conversation with this file.
 Work in `/Users/felg/gh/foss-earth`. Read the current `AGENTS.md`,
 [docs/proposals/settings.md](proposals/settings.md) and
