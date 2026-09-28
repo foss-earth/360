@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BaseTexture } from "@babylonjs/core";
-import { createNavigationOwner, type NavigationLease, type NavigationPresentation, type NavigationSnapshot } from "../engine/babylon/navigationLease";
+import { createNavigationOwner, type NavigationGlide, type NavigationLease, type NavigationPresentation, type NavigationSnapshot } from "../engine/babylon/navigationLease";
 import type { PanoramaCameraFrame, PanoramaOrb } from "../engine/babylon/panorama/panoramaRenderer";
 import type { PanoramaGpuTexture } from "../engine/babylon/panorama/panoramaTextures";
 import { createSettingsRegistry } from "../settings/registry";
@@ -11,7 +11,7 @@ import { FOSS_EARTH_PARAMETERS } from "../settings/catalogue";
 import { loadScene, type SceneFailure, type SceneHandle, type SceneRenderer, type SceneRuntime } from "./loadScene";
 import { createMemorySceneHistory } from "./sceneHistory";
 import { enuFrame, geodeticPoint, scale, add, sub, length, dot, vec3, type Vec3 } from "./panoramaMath";
-import { INSIDE_SHARE, orbitAngles, orbitLook } from "./panoramaFlight";
+import { INSIDE_SHARE, orbitAngles } from "./panoramaFlight";
 import type { ResourceBackend } from "./panoramaResources";
 
 const GROUND = 250;
@@ -31,6 +31,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   let continuous = 0;
   const restored: NavigationSnapshot[] = [];
   const placed: NavigationPresentation[] = [];
+  const glides: { view: NavigationPresentation; pivot: Vec3; motion: NavigationGlide }[] = [];
   const snapshot: NavigationSnapshot = {
     version: 1, view: { latDeg: 44.97, lonDeg: -93.26, headingDeg: 0, pitchDeg: 60, zoomMeters: 600 },
     camera: { center: { x: 1, y: 2, z: 3 }, yaw: 0, pitch: 1, radius: 600, fov: 0.8 },
@@ -67,6 +68,12 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
         placed.push(view);
         return true;
       },
+      glideNavigationCamera: (lease: NavigationLease, view: NavigationPresentation, pivot: { x: number; y: number; z: number }, motion: NavigationGlide) => {
+        if (owner.current() !== lease) return false;
+        glides.push({ view, pivot: vec3(pivot), motion });
+        return true;
+      },
+      getCameraHandling: () => ({ pitchDeg: { min: 1, max: 89 }, zoomMeters: { min: 25, max: 25_000_000 }, glideKeepPerFrame: 0.82 }),
     }),
     getPresentationView: () => owner.current()?.getPresentationView() ?? null,
     setNavigationIntentHandler: () => () => {},
@@ -150,7 +157,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, placed, textures, history, settings, failures,
+    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, history, settings, failures,
     clock: () => clock,
     /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
     failFetches: (pattern: RegExp | null) => { failing = pattern; },
@@ -295,7 +302,7 @@ describe("loadScene", () => {
     expect(h.continuous()).toBe(0);
   });
 
-  it("brakes a flight out cut short by Escape where it got to, and a Back during it joins the exit", async () => {
+  it("gives the camera to the globe where a flight out cut short by Escape got to, moving on outward, and a Back during it joins the exit", async () => {
     const h = harness({ placeCamera: true });
     const handle = await loaded(h);
     handles.push(handle);
@@ -304,6 +311,7 @@ describe("loadScene", () => {
     await entering;
     const photo = h.orbs.get("pair-photo")!;
     const marker = photo.state.marker as Vec3;
+    const startedAt = h.clock();
     const exiting = handle.exit();
     await settle(h, 5);
     expect(handle.status.phase).toBe("exiting");
@@ -313,29 +321,31 @@ describe("loadScene", () => {
     const placedBefore = h.placed.length;
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     h.history.back();
-    await settle(h, 60);
     expect(await exiting).toEqual({ ok: true });
+    // At once: the globe has the camera, and input, where the flight got to.
     expect(handle.status.phase).toBe("overview");
-    // It went on a little, slowing, rather than jumping to the flight's end.
-    const coasted = h.placed.slice(placedBefore).map(view => length(sub(vec3(view.position), vec3(cutAt.position))));
-    expect(coasted.length).toBeGreaterThan(5);
-    for (let i = 2; i < coasted.length; i++) expect(coasted[i] - coasted[i - 1]).toBeLessThanOrEqual(coasted[i - 1] - coasted[i - 2] + 1e-9);
-    const rest = h.placed.at(-1)!;
-    expect(length(sub(vec3(rest.position), marker))).toBeLessThan(10);
-    // The globe camera's own orbit there: the eye where it stopped, as near as the zoom limit allows.
-    const end = h.restored.at(-1)!;
-    const center = vec3(end.camera.center);
-    const look = orbitLook(center, end.camera.yaw, end.camera.pitch);
-    const eye = sub(center, scale(look, end.camera.radius));
-    expect(length(sub(eye, vec3(rest.position)))).toBeLessThan(1e-6);
-    expect(end.camera.radius).toBe(25);
-    expect(end.camera.fov).toBe(0.8);
-    expect(photo.expansions.at(-1)).toBeNull();
     expect(h.owner.current()).toBeNull();
+    expect(h.placed.length).toBe(placedBefore);
+    expect(h.glides).toHaveLength(1);
+    const [{ view, pivot, motion }] = h.glides;
+    expect(view).toEqual(cutAt);
+    expect(pivot).toEqual(marker);
+    // Still backing away from the orb, as fast as the flight was; the field of view goes back to the overview's.
+    const away = sub(vec3(view.position), marker);
+    expect(dot(vec3(motion.velocity), away)).toBeGreaterThan(0);
+    expect(length(vec3(motion.velocity))).toBeGreaterThan(1);
+    expect(motion).toMatchObject({ fovRad: 0.8, inputSince: startedAt, press: null });
+    // The sphere turns back into the orb as the glide slows, and then the orb is itself again.
+    await settle(h, 3);
+    const fading = photo.expansions.slice(-3) as { reveal: number; radiusMeters: number }[];
+    expect(fading.every(each => each !== null)).toBe(true);
+    expect(fading[2].reveal).toBeLessThan(fading[0].reveal);
+    await settle(h, 60);
+    expect(photo.expansions.at(-1)).toBeNull();
     expect(h.continuous()).toBe(0);
   });
 
-  it("brakes a flight in cut short by a swipe where it got to, entering nothing, and a press stops the braking", async () => {
+  it("gives the camera to the globe at once where a flight in cut short by a swipe got to, moving on toward the orb, entering nothing", async () => {
     // On the page, so its events reach the window as a canvas's do.
     const canvas = document.body.appendChild(document.createElement("canvas"));
     const h = harness({ placeCamera: true, canvas });
@@ -343,36 +353,26 @@ describe("loadScene", () => {
     try {
       const handle = await loaded(h);
       handles.push(handle);
+      const startedAt = h.clock();
       const entering = handle.enter("pair-grid");
       await settle(h, 20);
       const grid = h.orbs.get("pair-grid")!;
       const marker = grid.state.marker as Vec3;
       const cutAt = h.placed.at(-1)!;
+      const swipedAt = h.clock();
       canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
-      await settle(h, 4);
-      // Braking: still moving on towards the orb, not back to the start.
-      const moved = length(sub(vec3(h.placed.at(-1)!.position), vec3(cutAt.position)));
-      expect(moved).toBeGreaterThan(0);
-      expect(length(sub(vec3(h.placed.at(-1)!.position), marker))).toBeLessThan(length(sub(vec3(cutAt.position), marker)));
-      expect(handle.status.phase).toBe("overview");
-      // The same swipe going on, as its momentum does, changes nothing; a press grabs the camera where it is.
-      canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 8, bubbles: true }));
-      await settle(h, 1);
-      const placedBefore = h.placed.length;
-      expect(placedBefore).toBeGreaterThan(0);
-      canvas.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 1, pointerType: "mouse", button: 0, bubbles: true }));
-      await settle(h, 5);
       expect(await entering).toMatchObject({ ok: false, reason: "cancelled" });
-      const rest = h.placed.at(-1)!;
-      expect(h.placed.length).toBe(placedBefore);
-      const end = h.restored.at(-1)!;
-      expect(end).not.toBe(h.runtime.captureNavigationSnapshot());
-      const center = vec3(end.camera.center);
-      const eye = sub(center, scale(orbitLook(center, end.camera.yaw, end.camera.pitch), end.camera.radius));
-      expect(length(sub(eye, vec3(rest.position)))).toBeLessThan(1e-6);
-      expect(grid.expansions.at(-1)).toBeNull();
+      expect(handle.status.phase).toBe("overview");
       expect(h.owner.current()).toBeNull();
+      const [{ view, motion }] = h.glides;
+      expect(view).toEqual(cutAt);
+      expect(dot(vec3(motion.velocity), sub(marker, vec3(view.position)))).toBeGreaterThan(0);
+      // The swipe began after the flight did, so it goes on to the globe.
+      expect(motion.inputSince).toBeGreaterThanOrEqual(startedAt);
+      expect(motion.inputSince).toBeLessThan(swipedAt);
       expect(h.history.entries()).toHaveLength(0);
+      await settle(h, 60);
+      expect(grid.expansions.at(-1)).toBeNull();
       expect(h.continuous()).toBe(0);
     } finally {
       now.mockRestore();
@@ -380,8 +380,23 @@ describe("loadScene", () => {
     }
   });
 
-  it("lets an entry take over a flight in cut short, from where it stopped", async () => {
-    // On the page, so its events reach the window as a canvas's do.
+  it("gives a mouse press that cuts a flight short to the globe, as a drag from where it is", async () => {
+    const canvas = document.body.appendChild(document.createElement("canvas"));
+    const h = harness({ placeCamera: true, canvas });
+    try {
+      const handle = await loaded(h);
+      handles.push(handle);
+      const entering = handle.enter("pair-grid");
+      await settle(h, 20);
+      canvas.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 7, pointerType: "mouse", button: 0, clientX: 300, clientY: 200, bubbles: true }));
+      expect(await entering).toMatchObject({ ok: false, reason: "cancelled" });
+      expect(h.glides.at(-1)!.motion.press).toEqual({ pointerId: 7, button: 0, clientX: 300, clientY: 200 });
+    } finally {
+      canvas.remove();
+    }
+  });
+
+  it("lets an entry take over from a flight cut short while its sphere is still turning back into the orb", async () => {
     const canvas = document.body.appendChild(document.createElement("canvas"));
     const h = harness({ placeCamera: true, canvas });
     const now = vi.spyOn(performance, "now").mockImplementation(() => h.clock());
@@ -392,14 +407,10 @@ describe("loadScene", () => {
       await settle(h, 20);
       canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
       await settle(h, 2);
-      const restoredBefore = h.restored.length;
-      const second = handle.enter("pair-photo");
-      await settle(h, 80);
       expect(await first).toMatchObject({ ok: false, reason: "cancelled" });
+      const second = handle.enter("pair-grid");
+      await settle(h, 80);
       expect(await second).toEqual({ ok: true });
-      // Settled at once where the coast had got to, then in.
-      expect(h.restored.length).toBe(restoredBefore + 1);
-      expect(h.restored.at(-1)!.camera.radius).toBeGreaterThanOrEqual(25);
       expect(handle.status.phase).toBe("immersive");
     } finally {
       now.mockRestore();
@@ -407,7 +418,7 @@ describe("loadScene", () => {
     }
   });
 
-  it("settles a flight out at once where it got to when an entry takes over", async () => {
+  it("gives the camera to the globe at rest where a flight out got to when an entry takes over", async () => {
     const h = harness({ placeCamera: true });
     const handle = await loaded(h);
     handles.push(handle);
@@ -416,14 +427,13 @@ describe("loadScene", () => {
     expect(await first).toEqual({ ok: true });
     const exiting = handle.exit();
     await settle(h, 10);
-    const placedBefore = h.placed.length;
-    const restoredBefore = h.restored.length;
+    const cutAt = h.placed.at(-1)!;
     const entering = handle.enter("pair-grid");
     expect(await exiting).toEqual({ ok: true });
-    // No coast: one settled orbit where the flight was, short of its end.
-    expect(h.placed.length).toBe(placedBefore);
-    expect(h.restored.length).toBe(restoredBefore + 1);
-    expect(h.restored.at(-1)!.camera.radius).toBeLessThan(600);
+    const [{ view, motion }] = h.glides;
+    expect(view).toEqual(cutAt);
+    expect(motion.velocity).toEqual({ x: 0, y: 0, z: 0 });
+    expect(h.orbs.get("pair-photo")!.expansions.at(-1)).toBeNull();
     await settle(h, 80);
     expect(await entering).toEqual({ ok: true });
     expect(handle.status.phase).toBe("immersive");
