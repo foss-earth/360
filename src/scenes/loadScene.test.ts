@@ -8,7 +8,7 @@ import type { PanoramaCameraFrame, PanoramaOrb } from "../engine/babylon/panoram
 import type { PanoramaGpuTexture } from "../engine/babylon/panorama/panoramaTextures";
 import { createSettingsRegistry } from "../settings/registry";
 import { FOSS_EARTH_PARAMETERS } from "../settings/catalogue";
-import { loadScene, type SceneFailure, type SceneHandle, type SceneRenderer, type SceneRuntime } from "./loadScene";
+import { loadScene, type SceneFailure, type SceneHandle, type SceneProgress, type SceneRenderer, type SceneRuntime } from "./loadScene";
 import { createMemorySceneHistory } from "./sceneHistory";
 import { enuFrame, geodeticPoint, scale, add, sub, length, dot, vec3, type Vec3 } from "./panoramaMath";
 import { INSIDE_SHARE, orbitAngles } from "./panoramaFlight";
@@ -22,7 +22,7 @@ const manifest = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-sc
 // One panorama with previews up to 256 px faces and whole images 1024 and 2048 px wide, in the same folder.
 const cardinal = JSON.parse(readFileSync(path.join(PUBLIC, "examples/panorama-scenes/umn-cardinal.scene.json"), "utf8")) as Record<string, unknown>;
 
-function harness(options: { available?: boolean; groundReady?: boolean; canvas?: HTMLCanvasElement; placeCamera?: boolean } = {}) {
+function harness(options: { available?: boolean; groundReady?: boolean; canvas?: HTMLCanvasElement; placeCamera?: boolean; prepareTerrain?: SceneRuntime["prepareTerrain"] } = {}) {
   let clock = 0;
   const frameCallbacks = new Set<() => void>();
   const tick = (ms = 16) => { clock += ms; for (const callback of [...frameCallbacks]) callback(); };
@@ -82,7 +82,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     endContinuous: () => { continuous -= 1; },
     onDeviceLost: listener => { deviceLost.add(listener); return () => deviceLost.delete(listener); },
     onDeviceRestored: () => () => {},
-    prepareTerrain: async () => ({ groundHeightMeters: GROUND, altitudeMeters: GROUND }),
+    prepareTerrain: vi.fn(options.prepareTerrain ?? (async () => ({ groundHeightMeters: GROUND, altitudeMeters: GROUND }))),
     // Only a canvas for the look input, when a test asks for one.
     ...(options.canvas ? { scene: { getEngine: () => ({ getRenderingCanvas: () => options.canvas, getHardwareScalingLevel: () => 1, getCaps: () => ({ maxTextureSize: 8192 }) }) } as never } : {}),
   };
@@ -135,6 +135,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   });
   let failing: RegExp | null = null;
   const failures: SceneFailure[] = [];
+  const progress: SceneProgress[] = [];
   const backend: ResourceBackend<PanoramaGpuTexture> = {
     async fetch(url) {
       if (failing?.test(url)) throw new TypeError("Failed to fetch");
@@ -150,14 +151,14 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   const history = createMemorySceneHistory();
 
   const load = (reduced = false, document: Record<string, unknown> = manifest) => loadScene(runtime, document, {
-    baseUrl: MANIFEST_URL, settings, history, onFailure: failure => failures.push(failure),
+    baseUrl: MANIFEST_URL, settings, history, onFailure: failure => failures.push(failure), onProgress: update => progress.push(update),
     internals: {
       renderer, backend, now: () => clock, reducedMotion: () => reduced,
       onFrame: callback => { frameCallbacks.add(callback); return () => frameCallbacks.delete(callback); },
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, history, settings, failures,
+    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, history, settings, failures, progress, backend,
     clock: () => clock,
     /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
     failFetches: (pattern: RegExp | null) => { failing = pattern; },
@@ -194,12 +195,13 @@ describe("loadScene", () => {
   });
 
   it("keeps placements pending until the ground is displayed, then places each orb above it and opens the overview", async () => {
-    const h = harness({ groundReady: false });
+    const h = harness({ groundReady: false, prepareTerrain: () => new Promise(() => {}) });
     const handle = await loaded(h);
     handles.push(handle);
     expect(handle.status.entries.map(entry => entry.placement)).toEqual(["pending", "pending"]);
     expect(handle.status.overview).toBe("pending");
     expect(h.restored).toHaveLength(0);
+    expect(h.runtime.prepareTerrain).toHaveBeenCalledOnce();
     h.setGround(true);
     await settle(h, 2);
     expect(handle.status.entries.map(entry => entry.placement)).toEqual(["placed", "placed"]);
@@ -207,6 +209,111 @@ describe("loadScene", () => {
     expect(handle.status.overview).toBe("applied");
     expect(h.restored).toHaveLength(1);
     expect(h.orbs.get("pair-photo")!.state.marker).not.toBeNull();
+  });
+
+  it("opens the overview without waiting for previews, and shows one preview while another still downloads", async () => {
+    const h = harness({ groundReady: false });
+    const fetchImage = h.backend.fetch;
+    let releaseGrid!: () => void;
+    const gridGate = new Promise<void>(resolve => { releaseGrid = resolve; });
+    h.backend.fetch = async (url, init) => {
+      if (url.includes("cardinal-grid")) await gridGate;
+      return fetchImage(url, init);
+    };
+    const result = await h.load();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const handle = result.handle;
+    handles.push(handle);
+    await vi.waitFor(() => expect(handle.status.entries.find(entry => entry.id === "pair-photo")?.preview).toBe("ready"));
+    expect(handle.status.overview).toBe("applied");
+    expect(handle.status.entries.find(entry => entry.id === "pair-grid")?.preview).toBe("loading");
+    expect(h.orbs.get("pair-photo")!.state.texture).not.toBeNull();
+    expect(handle.status.entries.find(entry => entry.id === "pair-photo")?.previewDetail?.representation).toBe("preview-64");
+    expect(h.orbs.get("pair-grid")!.state.texture).toBeNull();
+    expect(h.progress.some(event => event.kind === "image")).toBe(false);
+    expect(h.progress.some(event => event.kind === "preview" && event.receivedBytes > 0)).toBe(true);
+    releaseGrid();
+    await vi.waitFor(() => expect(handle.status.entries.every(entry => entry.preview === "ready")).toBe(true));
+  });
+
+  it("cancels automatic terrain preparation on new input and ignores its late result", async () => {
+    const canvas = document.createElement("canvas");
+    document.body.append(canvas);
+    let finish!: (value: { groundHeightMeters: number; altitudeMeters: number }) => void;
+    let signal: AbortSignal | undefined;
+    const h = harness({ canvas, groundReady: false, prepareTerrain: request => {
+      signal = request.signal;
+      return new Promise(resolve => { finish = resolve; });
+    } });
+    const result = await h.load();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    handles.push(result.handle);
+    const input = new MouseEvent("pointerdown", { bubbles: true, cancelable: true });
+    canvas.dispatchEvent(input);
+    expect(input.defaultPrevented).toBe(false);
+    expect(signal?.aborted).toBe(true);
+    finish({ groundHeightMeters: GROUND, altitudeMeters: GROUND });
+    h.setGround(true);
+    await settle(h, 2);
+    expect(h.restored).toHaveLength(0);
+    expect(result.handle.status.overview).toBe("none");
+    expect(h.failures).toHaveLength(0);
+    canvas.remove();
+  });
+
+  it("does not apply an externally cancelled overview after its terrain arrives", async () => {
+    let finish!: (value: { groundHeightMeters: number; altitudeMeters: number }) => void;
+    const h = harness({ groundReady: false, prepareTerrain: () => new Promise(resolve => { finish = resolve; }) });
+    const result = await h.load();
+    if (!result.ok) throw new Error("Expected valid scene");
+    handles.push(result.handle);
+    const controller = new AbortController();
+    const overview = result.handle.showOverview({ signal: controller.signal });
+    controller.abort();
+    finish({ groundHeightMeters: GROUND, altitudeMeters: GROUND });
+    expect(await overview).toMatchObject({ ok: false, reason: "cancelled" });
+    h.setGround(true);
+    await settle(h, 2);
+    expect(result.handle.status.overview).toBe("none");
+    expect(h.restored).toHaveLength(0);
+  });
+
+  it("gives up a pending overview when a controller or the host changes the camera", async () => {
+    let finish!: (value: { groundHeightMeters: number; altitudeMeters: number }) => void;
+    let signal: AbortSignal | undefined;
+    const h = harness({ groundReady: false, prepareTerrain: request => {
+      signal = request.signal;
+      return new Promise(resolve => { finish = resolve; });
+    } });
+    const result = await h.load();
+    if (!result.ok) throw new Error("Expected valid scene");
+    handles.push(result.handle);
+    const snapshot = h.runtime.captureNavigationSnapshot()!;
+    h.runtime.captureNavigationSnapshot = () => ({ ...snapshot, view: { ...snapshot.view, headingDeg: 20 } });
+    h.tick();
+    expect(signal?.aborted).toBe(true);
+    finish({ groundHeightMeters: GROUND, altitudeMeters: GROUND });
+    h.setGround(true);
+    await settle(h, 2);
+    expect(result.handle.status.overview).toBe("none");
+    expect(h.restored).toHaveLength(0);
+  });
+
+  it("reports a streamed manifest's actual bytes and turns interrupted bodies into scene failures", async () => {
+    const h = harness();
+    const updates: SceneProgress[] = [];
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } })));
+    const loading = loadScene(h.runtime, MANIFEST_URL, { settings: h.settings, onProgress: event => updates.push(event) });
+    stream.enqueue(new TextEncoder().encode('{"format":'));
+    await vi.waitFor(() => expect(updates.at(-1)?.receivedBytes).toBe(10));
+    expect(updates.at(-1)).toMatchObject({ kind: "manifest", totalBytes: null, state: "loading" });
+    stream.error(new Error("Connection interrupted"));
+    expect(await loading).toMatchObject({ ok: false, errors: [{ path: "$", message: expect.stringContaining("Connection interrupted") }] });
+    expect(updates.at(-1)?.state).toBe("failed");
+    fetchMock.mockRestore();
   });
 
   it("without the flight, enters through an expanding reveal, hands off with the camera's own view, and exits to the overview it left", async () => {
@@ -793,6 +900,7 @@ describe("loadScene", () => {
     handles.push(handle);
     expect(handle.status.entries).toHaveLength(2);
     expect(handle.status.renderingAvailable).toBe(false);
+    expect(handle.status.entries.every(entry => entry.preview === "failed" && entry.message === "WebGL")).toBe(true);
     expect(await handle.enter("pair-photo")).toMatchObject({ ok: false, reason: "unavailable" });
   });
 });

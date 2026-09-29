@@ -18,7 +18,7 @@ import type { BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import type { FrameProfiler } from "../perf/frameProfiler";
 import type { NavigationLease, NavigationPresentation, NavigationSnapshot } from "../engine/babylon/navigationLease";
 import { createPanoramaRenderer, effectiveOrbRadius, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
-import { createPanoramaUploader, isWebGpuEngine, type PanoramaGpuTexture, type PanoramaUploader } from "../engine/babylon/panorama/panoramaTextures";
+import { createPanoramaUploader, type PanoramaGpuTexture, type PanoramaUploader } from "../engine/babylon/panorama/panoramaTextures";
 import { getAppSettings } from "../settings/appSettings";
 import type { SettingsRegistry } from "../settings/registry";
 import { isNumberRange } from "../settings/values";
@@ -169,6 +169,17 @@ export interface SceneFailure {
   message: string;
 }
 
+/** Network progress, before a complete image can be decoded and shown. */
+export interface SceneProgress {
+  /** Stable for a manifest URL or a representation in this scene generation. */
+  id: string;
+  kind: "manifest" | "preview" | "image";
+  title: string;
+  receivedBytes: number;
+  totalBytes: number | null;
+  state: "loading" | "ready" | "failed" | "cancelled";
+}
+
 export type SceneActionResult =
   | { ok: true }
   | { ok: false; reason: "disposed" | "busy" | "cancelled" | "unavailable" | "failed"; message: string };
@@ -215,6 +226,8 @@ export interface LoadSceneOptions {
   history?: SceneHistoryAdapter | null;
   /** Told of each failure as it happens, for the host's log. */
   onFailure?: (failure: SceneFailure) => void;
+  /** Actual response bytes as they arrive; previews and entered images load independently. */
+  onProgress?: (progress: SceneProgress) => void;
   /** Test seams: a renderer, a GPU backend and a frame driver. */
   internals?: {
     renderer?: SceneRenderer;
@@ -252,35 +265,48 @@ function sceneLimits(settings: SettingsRegistry): SceneLimits {
 }
 
 /** Reads a manifest within the byte limit, following redirects; its final URL is the base. */
-async function fetchManifest(url: URL, maxBytes: number, signal?: AbortSignal): Promise<{ text: string; baseUrl: string } | { error: string }> {
-  let response: Response;
+async function fetchManifest(url: URL, maxBytes: number, signal?: AbortSignal, onProgress?: (progress: SceneProgress) => void): Promise<{ text: string; baseUrl: string } | { error: string }> {
+  let received = 0;
+  let totalBytes: number | null = null;
+  const publish = (state: SceneProgress["state"]): void => onProgress?.({ id: url.href, kind: "manifest", title: url.href, receivedBytes: received, totalBytes, state });
+  publish("loading");
   try {
-    response = await fetch(url, { credentials: "omit", signal });
+    const response = await fetch(url, { credentials: "omit", signal });
+    if (!response.ok) throw new Error(`answered ${response.status}`);
+    const announced = Number(response.headers.get("content-length"));
+    // Content-Length describes the compressed body when content encoding is present.
+    if (announced > 0 && Number.isFinite(announced) && !response.headers.get("content-encoding")) totalBytes = announced;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("has no body");
+    const chunks: Uint8Array[] = [];
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (signal?.aborted) throw signal.reason;
+        received += value.byteLength;
+        if (received > maxBytes) throw new Error(`passed the ${maxBytes}-byte manifest limit (scene.manifestMiB) while arriving`);
+        chunks.push(value);
+        publish("loading");
+      }
+    } catch (error) {
+      void reader.cancel().catch(() => {});
+      throw error;
+    }
+    if (signal?.aborted) throw signal.reason;
+    const bytes = new Uint8Array(received);
+    let at = 0;
+    for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
+    totalBytes = received;
+    publish("ready");
+    return { text: new TextDecoder().decode(bytes), baseUrl: response.url || url.href };
   } catch (error) {
+    publish(signal?.aborted ? "cancelled" : "failed");
     return { error: `${url.href} could not be fetched: ${error instanceof Error ? error.message : String(error)}` };
   }
-  if (!response.ok) return { error: `${url.href} answered ${response.status}` };
-  const reader = response.body?.getReader();
-  if (!reader) return { error: `${url.href} has no body` };
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value.byteLength;
-    if (received > maxBytes) {
-      void reader.cancel();
-      return { error: `the manifest passed the ${maxBytes}-byte limit (scene.manifestMiB) while arriving` };
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(received);
-  let at = 0;
-  for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.byteLength; }
-  return { text: new TextDecoder().decode(bytes), baseUrl: response.url || url.href };
 }
 
-async function resolveInput(input: SceneInput, settings: SettingsRegistry, baseUrl: string | URL | undefined, signal?: AbortSignal): Promise<{ ok: true; scene: ValidatedScene } | { ok: false; errors: readonly SceneDiagnostic[] }> {
+async function resolveInput(input: SceneInput, settings: SettingsRegistry, baseUrl: string | URL | undefined, signal?: AbortSignal, onProgress?: (progress: SceneProgress) => void): Promise<{ ok: true; scene: ValidatedScene } | { ok: false; errors: readonly SceneDiagnostic[] }> {
   const limits = sceneLimits(settings);
   const isUrl = input instanceof URL || (typeof input === "string" && !input.trim().startsWith("{"));
   if (isUrl) {
@@ -291,7 +317,7 @@ async function resolveInput(input: SceneInput, settings: SettingsRegistry, baseU
       return { ok: false, errors: [{ path: "$", message: `${String(input)} is not a URL` }] };
     }
     if (url.protocol !== "https:" && url.protocol !== "http:") return { ok: false, errors: [{ path: "$", message: "a scene URL must be http or https" }] };
-    const fetched = await fetchManifest(url, limits.manifestBytes, signal);
+    const fetched = await fetchManifest(url, limits.manifestBytes, signal, onProgress);
     if ("error" in fetched) return { ok: false, errors: [{ path: "$", message: fetched.error }] };
     const result = validateScene(fetched.text, { baseUrl: fetched.baseUrl, limits });
     return result.ok ? { ok: true, scene: result.scene } : { ok: false, errors: result.errors };
@@ -307,7 +333,7 @@ async function resolveInput(input: SceneInput, settings: SettingsRegistry, baseU
  */
 export async function loadScene(runtime: SceneRuntime, input: SceneInput, options: LoadSceneOptions = {}): Promise<LoadSceneResult> {
   const settings = options.settings ?? getAppSettings();
-  const resolved = await resolveInput(input, settings, options.baseUrl, options.signal);
+  const resolved = await resolveInput(input, settings, options.baseUrl, options.signal, options.onProgress);
   if (!resolved.ok) return resolved;
   if (options.signal?.aborted) return { ok: false, errors: [{ path: "$", message: "Loading was cancelled." }] };
   return { ok: true, handle: createSceneHandle(runtime, resolved.scene, settings, options) };
@@ -436,6 +462,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   };
   let overviewState: SceneStatus["overview"] = current.overview && options.applyOverview !== false ? "pending" : "none";
   let appliedOverviewFov = false;
+  let overviewPreparation: AbortController | null = null;
+  let overviewPreparedView: NavigationSnapshot["view"] | null = null;
   let entries = new Map<string, Entry>();
   let immersion: Immersion | null = null;
   let operation: AbortController | null = null;
@@ -481,6 +509,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const created = createPanoramaRenderer(scene!, {
       getPresentationView: () => runtime.getPresentationView(),
       requestRender: () => runtime.requestRender(),
+      onError: cause => report("image", null, cause, `Panoramas could not be drawn: ${sentence(cause)}`),
       ...(profiler ? { profiler } : {}),
     });
     options.internals?.onRenderer?.(created);
@@ -497,9 +526,9 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   let uploader: PanoramaUploader | null = null;
   const uploadLimits = () => ({ bytesPerFrame: num("scene.panorama.uploadMiBPerFrame") * MIB, outstandingBytes: num("scene.panorama.uploadOutstandingMiB") * MIB });
   const backend: ResourceBackend<PanoramaGpuTexture> = options.internals?.backend ?? (() => {
-    const gpuUploader = scene && isWebGpuEngine(engine) ? createPanoramaUploader(scene, uploadLimits(), () => runtime.requestRender()) : null;
+    const gpuUploader = scene && renderer.available ? createPanoramaUploader(scene, uploadLimits(), () => runtime.requestRender()) : null;
     uploader = gpuUploader;
-    const refuse = () => Promise.reject(new ResourceRefusal(renderer.unavailableReason ?? "Panoramas need WebGPU.", "device"));
+    const refuse = () => Promise.reject(new ResourceRefusal(renderer.unavailableReason ?? "Panoramas are unavailable on this renderer.", "device"));
     return {
       fetch: (url, init) => fetch(url, init),
       // The browser decodes off the main thread: its wall time runs alongside frames, not in one.
@@ -515,7 +544,15 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       maxTextureSide: deviceMaxSide,
     };
   })();
-  const resources = createPanoramaResources(backend, resourceSettingsFrom(id => settings.get(id), detailCap()));
+  const resources = createPanoramaResources(backend, resourceSettingsFrom(id => settings.get(id), detailCap()), progress => {
+    if (disposed) return;
+    const entry = [...entries.values()].find(entry => entry.asset.id === progress.assetId && entry.asset.representations.includes(progress.representation));
+    if (!entry) return;
+    options.onProgress?.({
+      id: `${generation}/${progress.id}`, kind: progress.representation.role === "preview" ? "preview" : "image",
+      title: entry.record.title, receivedBytes: progress.receivedBytes, totalBytes: progress.totalBytes, state: progress.state,
+    });
+  });
 
   // One frame driver: scene frames in the app, a test's ticker otherwise.
   const frameCallbacks = new Set<() => void>();
@@ -642,13 +679,23 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         orb.update({ marker });
       }
       if (renderer.available) loadPreview(entry, 1);
-      else entry.preview.message = renderer.unavailableReason;
+      else {
+        entry.preview.state = "failed";
+        entry.preview.message = renderer.unavailableReason;
+      }
     }
     refreshPlacements();
     emit();
+    // The current camera may be far from this scene: sampling only displayed
+    // terrain cannot make that destination load. Prepare it independently of
+    // the image queue and apply as soon as its centre is available.
+    if (overviewState === "pending") void handle_.showOverview();
   }
 
   function unmount(): void {
+    overviewPreparation?.abort();
+    overviewPreparation = null;
+    overviewPreparedView = null;
     resetHover();
     for (const entry of entries.values()) {
       entry.preview.controller?.abort();
@@ -659,35 +706,41 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
 
   /** The preview that meets the orb's largest on-screen size at the asked density, within its range and the budget. */
-  function choosePreview(entry: Entry): { representation: ResolvedRepresentation; limitation: string | null } | null {
+  function choosePreview(entry: Entry, first = false): { representation: ResolvedRepresentation; limitation: string | null } | null {
     const diameter = range("scene.panorama.markerDiameter").max * devicePixelsPerCss();
     const wanted = previewFaceTexels(diameter, previewHalfAngle(), num("scene.panorama.previewDensity"));
     const faces = range("scene.panorama.previewFaceRange");
     const previews = entry.asset.representations.filter(rep => rep.role === "preview" && rep.projection === "cube");
     const inRange = previews.filter(rep => rep.projection === "cube" && rep.faceSize >= faces.min && rep.faceSize <= faces.max);
     const pool = inRange.length > 0 ? inRange : previews;
-    const choice = chooseRepresentation(pool, "preview", Math.min(Math.max(wanted, faces.min), faces.max), rep => (resources.wouldFit(rep) ? null : "the panorama GPU memory is full (scene.panorama.sourceGpuMiB)"));
+    const choice = chooseRepresentation(pool, "preview", first ? faces.min : Math.min(Math.max(wanted, faces.min), faces.max), rep => (resources.wouldFit(rep) ? null : "the panorama GPU memory is full (scene.panorama.sourceGpuMiB)"));
     if (!choice) return null;
     const outOfRange = inRange.length === 0 ? `no preview is within ${faces.min}–${faces.max} px (scene.panorama.previewFaceRange)` : null;
     return { representation: choice.representation, limitation: [outOfRange, choice.limitation].filter(Boolean).join("; ") || null };
   }
 
   /** `reportFailure` is false when entering waits on it, since entering reports its own failure. */
-  function loadPreview(entry: Entry, priority: number, reportFailure = true): void {
-    if (entry.preview.state === "loading" || entry.preview.state === "ready") return;
+  function loadPreview(entry: Entry, priority: number, reportFailure = true, sharpen = false): void {
+    if (entry.preview.controller || (entry.preview.state === "ready" && !sharpen)) return;
+    if (sharpen && (target === entry.record.id || immersion?.id === entry.record.id)) return;
+    const previous = entry.preview.handle;
     const failed = (cause: string): void => {
-      if (reportFailure) report("preview", entry, cause, `${entry.record.title}: its preview could not be loaded: ${sentence(cause)}`);
+      if (reportFailure) report("preview", entry, cause, previous
+        ? `${entry.record.title}: its sharper preview could not be loaded: ${sentence(cause)} The current preview remains available.`
+        : `${entry.record.title}: its preview could not be loaded: ${sentence(cause)}`);
     };
-    const choice = choosePreview(entry);
+    const choice = choosePreview(entry, !sharpen);
     if (!choice) {
+      if (previous) return;
       entry.preview = { ...entry.preview, state: "failed", message: "No preview fits the panorama GPU memory (scene.panorama.sourceGpuMiB)." };
       failed(entry.preview.message!);
       emit();
       return;
     }
+    if (choice.representation.id === previous?.representation.id) return;
     const controller = new AbortController();
     const loadingGeneration = generation;
-    entry.preview = { state: "loading", handle: null, limitation: choice.limitation, message: null, controller };
+    entry.preview = { state: previous ? "ready" : "loading", handle: previous, limitation: choice.limitation, message: null, controller };
     emit();
     resources.acquire(entry.asset, choice.representation, { signal: controller.signal, priority }).then(handle => {
       // A late arrival for a replaced or disposed scene is released, never shown.
@@ -697,11 +750,15 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       }
       entry.preview = { state: "ready", handle, limitation: choice.limitation, message: null, controller: null };
       entry.orb.update({ texture: handle.texture.texture });
+      previous?.release();
       runtime.requestRender();
       emit();
+      // Every orb gets its smallest allowed preview first. Sharpening waits
+      // behind those first previews, while an entered image has higher priority.
+      if (!sharpen) loadPreview(entry, 0, reportFailure, true);
     }, error => {
       if (disposed || loadingGeneration !== generation || controller.signal.aborted) return;
-      entry.preview = { state: "failed", handle: null, limitation: null, message: error instanceof Error ? error.message : String(error), controller: null };
+      entry.preview = { state: previous ? "ready" : "failed", handle: previous, limitation: null, message: error instanceof Error ? error.message : String(error), controller: null };
       failed(entry.preview.message!);
       emit();
     });
@@ -728,6 +785,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
 
   function tryApplyOverview(): void {
     if (overviewState !== "pending" || !current.overview || phase !== "overview") return;
+    if (overviewCameraMoved()) { cancelPendingOverview(); return; }
     const { target: place } = current.overview;
     let ground = 0;
     if (!place.height) {
@@ -738,7 +796,47 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     if (runtime.restoreNavigationSnapshot(snapshotFromOverview(current.overview, ground))) {
       overviewState = "applied";
       appliedOverviewFov = true;
+      overviewPreparation?.abort();
+      overviewPreparation = null;
+      overviewPreparedView = null;
       emit();
+    }
+  }
+
+  /** Includes gamepad steering and host camera changes that have no DOM gesture. */
+  function overviewCameraMoved(): boolean {
+    if (!overviewPreparedView) return false;
+    const view = runtime.captureNavigationSnapshot()?.view;
+    return Boolean(view && (view.latDeg !== overviewPreparedView.latDeg || view.lonDeg !== overviewPreparedView.lonDeg
+      || view.headingDeg !== overviewPreparedView.headingDeg || view.pitchDeg !== overviewPreparedView.pitchDeg
+      || view.zoomMeters !== overviewPreparedView.zoomMeters));
+  }
+
+  function cancelPendingOverview(): void {
+    if (overviewState !== "pending") return;
+    overviewState = "none";
+    overviewPreparation?.abort();
+    overviewPreparation = null;
+    overviewPreparedView = null;
+    emit();
+  }
+
+  // A delayed terrain result never takes the camera back from the person.
+  // Listen before the globe handles the same gesture, without consuming it.
+  if (canvas && typeof window !== "undefined") {
+    const onOverviewInput = (event: Event): void => {
+      if (event.type === "keydown") {
+        if ((event as KeyboardEvent).repeat || (document.activeElement !== canvas && event.target !== canvas)) return;
+      } else {
+        const target = event.target as Node | null;
+        if (target !== canvas && !(target && canvas.contains(target))) return;
+        if (event.type === "wheel" && !wheels?.begins()) return;
+      }
+      cancelPendingOverview();
+    };
+    for (const type of ["pointerdown", "wheel", "keydown", "gesturestart"]) {
+      window.addEventListener(type, onOverviewInput, { capture: true, passive: true });
+      cleanups.push(() => window.removeEventListener(type, onOverviewInput, { capture: true }));
     }
   }
 
@@ -852,6 +950,9 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   const gaveWay = (signal: AbortSignal): boolean => typeof signal.reason === "object" && signal.reason !== null && givingWay.has(signal.reason);
 
   function beginOperation(signal?: AbortSignal): AbortController {
+    overviewPreparation?.abort();
+    overviewPreparation = null;
+    if (overviewState === "pending") overviewState = "none";
     operation?.abort(giveWay("Replaced by another navigation."));
     const controller = new AbortController();
     operation = controller;
@@ -860,6 +961,12 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
 
   async function ensurePreview(entry: Entry, signal: AbortSignal): Promise<SourceHandle<PanoramaGpuTexture>> {
+    // Entry uses the image already shown, with no background preview replacing
+    // its shared reference during the flight into it.
+    if (entry.preview.state === "ready") {
+      entry.preview.controller?.abort();
+      entry.preview.controller = null;
+    }
     if (entry.preview.state !== "ready") {
       entry.preview.controller?.abort();
       entry.preview = { ...entry.preview, state: "idle", controller: null };
@@ -1658,9 +1765,10 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     exit: () => exitTo("push"),
     async replace(input, replaceOptions = {}) {
       if (disposed) return { ok: false, errors: [{ path: "$", message: "The scene has been disposed." }] };
-      const candidate = await resolveInput(input, settings, replaceOptions.baseUrl ?? current.baseUrl ?? undefined, replaceOptions.signal);
+      const candidate = await resolveInput(input, settings, replaceOptions.baseUrl ?? current.baseUrl ?? undefined, replaceOptions.signal, options.onProgress);
       if (!candidate.ok) return candidate;
       if (disposed) return { ok: false, errors: [{ path: "$", message: "The scene has been disposed." }] };
+      if (replaceOptions.signal?.aborted) return { ok: false, errors: [{ path: "$", message: "Loading was cancelled." }] };
       // Validated: now swap. Removing the active scene ends navigation at a valid overview.
       stopFade();
       operation?.abort(giveWay("The scene was replaced."));
@@ -1686,21 +1794,49 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       const overview = current.overview;
       if (!overview) return { ok: false, reason: "unavailable", message: "This scene has no overview." };
       if (immersion) return { ok: false, reason: "busy", message: "Exit the panorama first." };
+      overviewPreparation?.abort();
+      const controller = new AbortController();
+      overviewPreparation = controller;
+      const signal = overviewOptions.signal ? AbortSignal.any([controller.signal, overviewOptions.signal]) : controller.signal;
+      const loadingGeneration = generation;
+      const onAbort = (): void => {
+        if (overviewPreparation === controller) cancelPendingOverview();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      if (signal.aborted) {
+        onAbort();
+        signal.removeEventListener("abort", onAbort);
+        return { ok: false, reason: "cancelled", message: "Cancelled." };
+      }
       let ground = overview.target.height?.meters ?? runtime.surface.sample(overview.target.latitudeDeg, overview.target.longitudeDeg)?.heightMeters ?? null;
       if (ground === null) {
         overviewState = "pending";
         emit();
         try {
-          const prepared = await runtime.prepareTerrain({
+          const preparing = runtime.prepareTerrain({
             latDeg: overview.target.latitudeDeg, lonDeg: overview.target.longitudeDeg,
             radiusMeters: Math.max(overview.distanceMeters * 2, 200), altitudeAboveGroundMeters: 0, clearanceMeters: 0,
-            signal: overviewOptions.signal,
+            signal,
           });
+          // Preparation establishes its destination synchronously. Changes
+          // after that belong to the person or host, including a controller.
+          overviewPreparedView = runtime.captureNavigationSnapshot()?.view ?? null;
+          const prepared = await preparing;
           ground = prepared.groundHeightMeters;
         } catch (error) {
-          return failure(error, overviewOptions.signal ?? new AbortController().signal, null, "The scene's overview could not be shown");
+          signal.removeEventListener("abort", onAbort);
+          if (overviewPreparation === controller) overviewPreparation = null;
+          const result = failure(error, signal, null, "The scene's overview could not be shown");
+          if (!result.ok && result.reason === "failed") emit();
+          return result;
         }
       }
+      signal.removeEventListener("abort", onAbort);
+      if (disposed || loadingGeneration !== generation || signal.aborted) return { ok: false, reason: "cancelled", message: "Cancelled." };
+      if (overviewCameraMoved()) cancelPendingOverview();
+      if (signal.aborted) return { ok: false, reason: "cancelled", message: "Cancelled." };
+      overviewPreparation = null;
+      overviewPreparedView = null;
       if (!runtime.restoreNavigationSnapshot(snapshotFromOverview(overview, ground))) return { ok: false, reason: "busy", message: "Another owner holds the camera." };
       overviewState = "applied";
       appliedOverviewFov = true;
@@ -1777,4 +1913,3 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   mount(current);
   return handle_;
 }
-

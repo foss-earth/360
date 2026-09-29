@@ -6,8 +6,8 @@
  * the view. Every frame's uniforms are computed from the camera as it is for
  * that frame, in float64 on the CPU, immediately before the mesh draws.
  *
- * WebGPU only: on another backend `createPanoramaRenderer` reports why and
- * draws nothing.
+ * WebGPU and WebGL use the same geometry and analytic depth. WebGL 1 needs
+ * fragment depth and standard derivatives to preserve that contract.
  */
 import {
   Color4,
@@ -46,6 +46,7 @@ import {
   ORB_UNIFORMS,
   ORB_VERTEX,
 } from "./panoramaShaders";
+import { IMMERSION_FRAGMENT_GLSL, IMMERSION_VERTEX_GLSL, ORB_FRAGMENT_GLSL, ORB_VERTEX_GLSL } from "./panoramaShadersWebGL";
 import { isWebGpuEngine } from "./panoramaTextures";
 
 /** One frame's camera, as the globe is drawn with it: eye in float64 ECEF and the rotation-and-projection matrix. */
@@ -246,6 +247,8 @@ export interface PanoramaRendererOptions {
   /** The lease's presented view, read at draw time. */
   getPresentationView(): NavigationPresentation | null;
   requestRender(): void;
+  /** A shader rejected by the device, once per distinct diagnostic, for the host's log. */
+  onError?: (message: string) => void;
   /** Where preparing each draw's direction and parameters is timed, inside the draw phase. */
   profiler?: Pick<FrameProfiler, "clock" | "add">;
 }
@@ -255,13 +258,34 @@ const UNIFORMS_SECTION = "render/draw/panorama uniforms";
 
 export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOptions): PanoramaRenderer {
   const engine = scene.getEngine();
-  const available = isWebGpuEngine(engine);
-  const unavailableReason = available ? null : "Panoramas are drawn with WebGPU, and this page is using WebGL. The scene list still works; entering is off.";
+  const webGpu = isWebGpuEngine(engine);
+  const caps = engine.getCaps();
+  const unavailableReason = webGpu ? null
+    : !caps.fragmentDepthSupported ? "This graphics context cannot draw panorama depth. WebGL 1 needs the EXT_frag_depth extension."
+      : !caps.standardDerivatives ? "This graphics context cannot draw panorama edges. WebGL 1 needs the OES_standard_derivatives extension."
+        : !caps.highPrecisionShaderSupported ? "This graphics context cannot draw panoramas with the required shader precision."
+          : null;
+  const available = unavailableReason === null;
+  const webGl2 = !webGpu && "webGLVersion" in engine && Number(engine.webGLVersion) >= 2;
+  const backendDefines = webGpu ? [] : [
+    ...(webGl2 ? ["#define PANORAMA_WEBGL2"] : []),
+    ...(webGl2 || caps.textureLOD ? ["#define PANORAMA_TEXTURE_GRADIENTS"] : []),
+  ];
+  const shaderLanguage = webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL;
   let appearance: OrbAppearance = { previewFovDeg: 90, markerDiameterCssPx: { min: 24, max: 96 }, hitTargetDiameterCssPx: 44 };
   let delayFrames = 0;
   const records: { frameId: number; target: string; cameraRevision: string; uniformRevision: string }[] = [];
   const orbs = new Map<string, OrbInternal>();
   let disposed = false;
+  // The globe may sleep while an asynchronously compiled shader finishes.
+  // Its first usable frame must not wait for another camera or map update.
+  const onCompiled = (): void => { if (!disposed) options.requestRender(); };
+  const shaderErrors = new Set<string>();
+  const onError: NonNullable<ShaderMaterial["onError"]> = (_effect, message) => {
+    if (disposed || shaderErrors.has(message)) return;
+    shaderErrors.add(message);
+    options.onError?.(message);
+  };
   const profiler = options.profiler;
   /** Times a draw's preparation in the frame budget. */
   const timed = (prepare: () => void) => (): void => {
@@ -367,14 +391,16 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     : null;
 
   function orbMaterial(name: string, defines: string[], reveal: boolean): ShaderMaterial {
-    const material = new ShaderMaterial(name, scene, { vertexSource: ORB_VERTEX, fragmentSource: ORB_FRAGMENT }, {
+    const material = new ShaderMaterial(name, scene, { vertexSource: webGpu ? ORB_VERTEX : ORB_VERTEX_GLSL, fragmentSource: webGpu ? ORB_FRAGMENT : ORB_FRAGMENT_GLSL }, {
       attributes: ["position"],
       uniforms: [...ORB_UNIFORMS],
       samplers: ["panoramaCube", "panoramaEquirect"],
-      defines,
-      shaderLanguage: ShaderLanguage.WGSL,
+      defines: [...backendDefines, ...defines],
+      shaderLanguage,
       needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
     });
+    material.onCompiled = onCompiled;
+    material.onError = onError;
     material.backFaceCulling = false;
     if (reveal) {
       material.depthFunction = Constants.ALWAYS;
@@ -520,14 +546,16 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const key = defines.join(" ");
     let material = immersionMaterials.get(key);
     if (!material) {
-      material = new ShaderMaterial(`panorama-immersion-${key || "cube"}`, scene, { vertexSource: IMMERSION_VERTEX, fragmentSource: IMMERSION_FRAGMENT }, {
+      material = new ShaderMaterial(`panorama-immersion-${key || "cube"}`, scene, { vertexSource: webGpu ? IMMERSION_VERTEX : IMMERSION_VERTEX_GLSL, fragmentSource: webGpu ? IMMERSION_FRAGMENT : IMMERSION_FRAGMENT_GLSL }, {
         attributes: ["position"],
         uniforms: [...IMMERSION_UNIFORMS],
         samplers: ["panoramaCube", "panoramaEquirect", "nextCube", "nextEquirect"],
-        defines,
-        shaderLanguage: ShaderLanguage.WGSL,
+        defines: [...backendDefines, ...defines],
+        shaderLanguage,
         needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
       });
+      material.onCompiled = onCompiled;
+      material.onError = onError;
       material.backFaceCulling = false;
       material.depthFunction = Constants.ALWAYS;
       material.disableDepthWrite = true;
