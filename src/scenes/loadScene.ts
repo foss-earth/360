@@ -17,11 +17,12 @@ import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
 import type { BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import type { FrameProfiler } from "../perf/frameProfiler";
 import type { NavigationLease, NavigationPresentation, NavigationSnapshot } from "../engine/babylon/navigationLease";
-import { createPanoramaRenderer, effectiveOrbRadius, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer } from "../engine/babylon/panorama/panoramaRenderer";
+import { createPanoramaRenderer, effectiveOrbRadius, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer, type PanoramaRendererExperiments } from "../engine/babylon/panorama/panoramaRenderer";
 import { createPanoramaUploader, type PanoramaGpuTexture, type PanoramaUploader } from "../engine/babylon/panorama/panoramaTextures";
 import { getAppSettings } from "../settings/appSettings";
 import type { SettingsRegistry } from "../settings/registry";
 import { isNumberRange } from "../settings/values";
+import { RENDERER_EXPERIMENT_IDS } from "../settings/catalogue/renderer";
 import { SCENE_PARAMETERS } from "../settings/catalogue/scenes";
 import { chooseRepresentation, MIB, representationAroundPx, representationFaceTexels, representationGpuBytes, representationMaxSide } from "./budget";
 import type { AttributionRecord, ResolvedAsset, ResolvedPanorama, ResolvedRepresentation, SceneDiagnostic, ValidatedScene, ViewRecord } from "./format";
@@ -505,13 +506,28 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   });
 
   // ─── GPU side ───────────────────────────────────────────────────────
+  // The renderer's work-saving experiments, where the registry has them.
+  const experimentIds: Record<keyof PanoramaRendererExperiments, string> = {
+    bookkeeping: RENDERER_EXPERIMENT_IDS.panoramaBookkeeping,
+    opaqueImmersion: RENDERER_EXPERIMENT_IDS.opaqueImmersion,
+    shaders: RENDERER_EXPERIMENT_IDS.panoramaShaders,
+  };
+  const experiment = (id: string): boolean => settings.has(id) && settings.get(id) === true;
+  const panoramaExperiments = (): PanoramaRendererExperiments => ({
+    bookkeeping: experiment(experimentIds.bookkeeping),
+    opaqueImmersion: experiment(experimentIds.opaqueImmersion),
+    shaders: experiment(experimentIds.shaders),
+  });
+  let setRendererExperiments: ((experiments: PanoramaRendererExperiments) => void) | null = null;
   const renderer: SceneRenderer = options.internals?.renderer ?? (() => {
     const created = createPanoramaRenderer(scene!, {
       getPresentationView: () => runtime.getPresentationView(),
       requestRender: () => runtime.requestRender(),
       onError: cause => report("image", null, cause, `Panoramas could not be drawn: ${sentence(cause)}`),
       ...(profiler ? { profiler } : {}),
+      experiments: panoramaExperiments(),
     });
+    setRendererExperiments = experiments => created.setExperiments(experiments);
     options.internals?.onRenderer?.(created);
     return created;
   })();
@@ -1735,6 +1751,9 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
   for (const id of ["scene.panorama.uploadMiBPerFrame", "scene.panorama.uploadOutstandingMiB"]) cleanups.push(settings.watch(id, () => uploader?.setLimits(uploadLimits())));
   for (const id of ["scene.panorama.previewFov", "scene.panorama.markerDiameter", "scene.panorama.hitTargetDiameter"]) cleanups.push(settings.watch(id, applyAppearance));
+  for (const id of Object.values(experimentIds)) {
+    if (settings.has(id)) cleanups.push(settings.watch(id, () => setRendererExperiments?.(panoramaExperiments())));
+  }
   cleanups.push(settings.watch("scene.panorama.markerRadiusMeters", () => {
     for (const entry of entries.values()) if (entry.record.marker.radiusMeters === undefined) entry.orb.update({ radiusMeters: num("scene.panorama.markerRadiusMeters") });
     emit();

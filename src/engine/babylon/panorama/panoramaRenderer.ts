@@ -46,7 +46,7 @@ import {
   ORB_UNIFORMS,
   ORB_VERTEX,
 } from "./panoramaShaders";
-import { IMMERSION_FRAGMENT_GLSL, IMMERSION_VERTEX_GLSL, ORB_FRAGMENT_GLSL, ORB_VERTEX_GLSL } from "./panoramaShadersWebGL";
+import { IMMERSION_FRAGMENT_GLSL, IMMERSION_LEAN_UNIFORMS, IMMERSION_VERTEX_GLSL, ORB_FRAGMENT_GLSL, ORB_LEAN_UNIFORMS, ORB_VERTEX_GLSL } from "./panoramaShadersWebGL";
 import { isWebGpuEngine } from "./panoramaTextures";
 
 /** One frame's camera, as the globe is drawn with it: eye in float64 ECEF and the rotation-and-projection matrix. */
@@ -57,7 +57,7 @@ export interface PanoramaCameraFrame {
   view: ViewBasis;
   viewportHeightCssPx: number;
   /** A digest of the camera state, to correlate a frame's draws with its camera. */
-  revision: string;
+  readonly revision: string;
 }
 
 export interface OrbAppearance {
@@ -139,6 +139,21 @@ export interface PanoramaProbeResult {
   frame: PanoramaCameraFrame;
 }
 
+/**
+ * Changes meant to draw the same picture with less work, off until validated
+ * (docs/validation/panorama-experiments.md). Each is a renderer.experiments.* parameter.
+ */
+export interface PanoramaRendererExperiments {
+  /** Draw records, camera revisions and earlier frames' uniforms only while a check captures or delays. */
+  bookkeeping: boolean;
+  /** Immersion at full opacity drawn without blending. */
+  opaqueImmersion: boolean;
+  /** WebGL: the PANORAMA_LEAN shaders. WebGPU draws as before. */
+  shaders: boolean;
+}
+
+export const NO_PANORAMA_EXPERIMENTS: Readonly<PanoramaRendererExperiments> = { bookkeeping: false, opaqueImmersion: false, shaders: false };
+
 export interface PanoramaRenderer {
   readonly available: boolean;
   /** Why panoramas cannot be drawn, or null. */
@@ -158,8 +173,15 @@ export interface PanoramaRenderer {
    * the view ray each pixel drew with, and the image direction it sampled.
    */
   probe(target: { orb: string } | { immersion: true }, outputs: readonly PanoramaProbeOutput[]): Promise<PanoramaProbeResult>;
+  /** Turns the work-saving experiments on or off; what is left out keeps its value. */
+  setExperiments(experiments: Partial<PanoramaRendererExperiments>): void;
   /** Test only: draw with uniforms this many frames old (the negative control). */
   setUniformDelayFrames(frames: number): void;
+  /**
+   * Test only: keeps draw records even when the bookkeeping experiment leaves
+   * them out. Without that experiment they are always kept.
+   */
+  captureDraws(capture: boolean): void;
   /** Test only: the last frames' camera and uniform revisions, to show no draw used a stale camera. */
   drawRecords(): readonly { frameId: number; target: string; cameraRevision: string; uniformRevision: string }[];
   /** Test only: what an orb draws from, and its radius in `frame`, for a CPU reference to use the same inputs. */
@@ -251,6 +273,56 @@ export interface PanoramaRendererOptions {
   onError?: (message: string) => void;
   /** Where preparing each draw's direction and parameters is timed, inside the draw phase. */
   profiler?: Pick<FrameProfiler, "clock" | "add">;
+  /** The experiments to start with; all off when omitted. */
+  experiments?: Partial<PanoramaRendererExperiments>;
+}
+
+/** The lean shaders' marker: the variant is chosen per material by this define. */
+const LEAN_DEFINE = "#define PANORAMA_LEAN";
+
+/** A digest of a camera frame's inputs, to correlate a draw with its camera. */
+function frameRevision(eye: Vec3, basis: { forward: Vec3; up: Vec3 }, verticalFovRad: number, aspect: number): string {
+  return [...eye, ...basis.forward, ...basis.up, verticalFovRad, aspect].map(value => value.toPrecision(12)).join(",");
+}
+
+/**
+ * An orb's per-draw constants, in float64, as the lean orb shader takes
+ * them: its cap angle and flat window, which its fragments would otherwise
+ * each work out from the marker, the radius and the preview's angle. The
+ * distance and depth stay per fragment, in the shader's own arithmetic.
+ */
+export function orbDrawConstants(rel: Vec3, radius: number, tanPreviewHalfAngle: number): { sinAlpha: number; windowGain: number; identityWindow: boolean } {
+  const distance = length(rel);
+  const sinAlpha = Math.min(radius / distance, 1);
+  const cosAlpha = Math.sqrt(Math.max(1 - sinAlpha * sinAlpha, 0));
+  const tanAlpha = sinAlpha / Math.max(cosAlpha, 1e-7);
+  return {
+    sinAlpha,
+    windowGain: tanPreviewHalfAngle / Math.max(tanAlpha, 1e-7),
+    identityWindow: distance <= radius || tanAlpha >= tanPreviewHalfAngle,
+  };
+}
+
+/**
+ * The lean immersion's matrix from clip space to a ray in an image's frame:
+ * the inverse view-and-projection, then the image's rotation, divided by the
+ * ray's w. w is the same at every corner of the view (clip z and w are, and
+ * a perspective's w does not depend on x or y), so the division is exact
+ * across the triangle and the vertex shader needs none.
+ */
+export function imageFromClipMatrix(inverseViewRotProj: Matrix, content: Mat3, result: Matrix): Matrix {
+  const m = inverseViewRotProj.m;
+  // The ray's w at clip (0, 0, 0.5, 1); Babylon's row vectors: v' = v · M.
+  const w = 0.5 * m[11] + m[15];
+  const values: number[] = new Array(16);
+  for (let row = 0; row < 4; row++) {
+    for (let column = 0; column < 3; column++) {
+      const image = content[column];
+      values[row * 4 + column] = (m[row * 4] * image[0] + m[row * 4 + 1] * image[1] + m[row * 4 + 2] * image[2]) / w;
+    }
+    values[row * 4 + 3] = m[row * 4 + 3] / w;
+  }
+  return Matrix.FromArrayToRef(values, 0, result);
 }
 
 /** Nested under profileBabylonScene's draw phase, which these draws run in. */
@@ -273,6 +345,12 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   ];
   const shaderLanguage = webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL;
   let appearance: OrbAppearance = { previewFovDeg: 90, markerDiameterCssPx: { min: 24, max: 96 }, hitTargetDiameterCssPx: 44 };
+  const experiments: PanoramaRendererExperiments = { ...NO_PANORAMA_EXPERIMENTS, ...options.experiments };
+  /** The lean shaders exist in GLSL only. */
+  const leanShaders = (): boolean => experiments.shaders && !webGpu;
+  let captureDraws = false;
+  /** Whether draws are recorded and their camera frames kept for the negative control. */
+  const keepingRecords = (): boolean => !experiments.bookkeeping || captureDraws;
   let delayFrames = 0;
   const records: { frameId: number; target: string; cameraRevision: string; uniformRevision: string }[] = [];
   const orbs = new Map<string, OrbInternal>();
@@ -326,15 +404,20 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     }
     const viewRotProj = rotation.multiply(projection);
     const inverseViewRotProj = viewRotProj.clone().invert();
-    const revision = [...eye, ...basis.forward, ...basis.up, verticalFovRad, aspect].map(value => value.toPrecision(12)).join(",");
-    return {
+    const frame = {
       eye,
       viewRotProj,
       inverseViewRotProj,
       view: { ...basis, verticalFovRad, aspect },
       viewportHeightCssPx: canvasCssHeight(),
-      revision,
     };
+    if (!experiments.bookkeeping) return { ...frame, revision: frameRevision(eye, basis, verticalFovRad, aspect) };
+    // Formatted only when something reads it: a check's records, never an ordinary draw.
+    let revision: string | null = null;
+    return Object.defineProperty(frame, "revision", {
+      get: () => (revision ??= frameRevision(eye, basis, verticalFovRad, aspect)),
+      enumerable: true,
+    }) as PanoramaCameraFrame;
   }
 
   /** What the camera frame depends on, cheaply: the camera, its matrices' versions, the aspect and the canvas height. */
@@ -342,6 +425,24 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const camera = scene.activeCamera;
     if (!camera) return "";
     return `${camera.uniqueId}:${camera.getViewMatrix().updateFlag}:${camera.getProjectionMatrix().updateFlag}:${engine.getAspectRatio(camera)}:${canvasCssHeight()}`;
+  }
+  /** The same inputs as cameraKey, compared in place without building a string for every draw. */
+  const lastCameraInputs = { camera: -1, view: -1, projection: -1, aspect: Number.NaN, height: Number.NaN };
+  function cameraInputsChanged(): boolean {
+    const camera = scene.activeCamera;
+    const id = camera?.uniqueId ?? -1;
+    const view = camera ? camera.getViewMatrix().updateFlag : -1;
+    const projection = camera ? camera.getProjectionMatrix().updateFlag : -1;
+    const aspect = camera ? engine.getAspectRatio(camera) : 0;
+    const height = camera ? canvasCssHeight() : 0;
+    const last = lastCameraInputs;
+    const changed = last.camera !== id || last.view !== view || last.projection !== projection || last.aspect !== aspect || last.height !== height;
+    last.camera = id;
+    last.view = view;
+    last.projection = projection;
+    last.aspect = aspect;
+    last.height = height;
+    return changed;
   }
 
   // The frame every draw uses, and, for the negative control, one per earlier
@@ -354,11 +455,20 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   function drawFrame(): { current: PanoramaCameraFrame; uniforms: PanoramaCameraFrame } | null {
     const id = engine.frameId;
     const presentation = options.getPresentationView();
-    const key = cameraKey();
-    if (!frameCache || frameCache.id !== id || frameCache.key !== key || frameCache.presentation !== presentation) {
+    const lean = experiments.bookkeeping;
+    const key = lean ? "" : cameraKey();
+    // Always evaluated, so the inputs it keeps are this draw's.
+    const inputsChanged = lean && cameraInputsChanged();
+    if (!frameCache || frameCache.id !== id || frameCache.key !== key || inputsChanged || frameCache.presentation !== presentation) {
       const frame = currentFrame(presentation);
       frameCache = { id, key, presentation, frame };
-      if (frame) {
+      if (!frame) {
+        // Nothing to keep.
+      } else if (lean && delayFrames === 0) {
+        // Without a delay only this frame is read; the history waits for a check that asks for one.
+        history.length = 0;
+        historyFrameId = -1;
+      } else {
         // A camera moved within a rendered frame replaces that frame's entry.
         if (historyFrameId === id && history.length > 0) history[0] = frame;
         else {
@@ -375,6 +485,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   }
 
   function record(target: string, current: PanoramaCameraFrame, uniforms: PanoramaCameraFrame): void {
+    if (!keepingRecords()) return;
     records.push({ frameId: engine.frameId, target, cameraRevision: current.revision, uniformRevision: uniforms.revision });
     if (records.length > 600) records.splice(0, records.length - 600);
   }
@@ -390,12 +501,18 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     ? RawTexture.CreateRGBATexture(new Uint8Array([0, 0, 0, 255]), 1, 1, scene, false, false)
     : null;
 
+  /** Every orb material, overlays and probes included, so the shader variant follows the experiment. */
+  const orbMaterials = new Set<ShaderMaterial>();
+  function withLeanDefine(defines: string[], lean: boolean): string[] {
+    const others = defines.filter(define => define !== LEAN_DEFINE);
+    return lean ? [...others, LEAN_DEFINE] : others;
+  }
   function orbMaterial(name: string, defines: string[], reveal: boolean): ShaderMaterial {
     const material = new ShaderMaterial(name, scene, { vertexSource: webGpu ? ORB_VERTEX : ORB_VERTEX_GLSL, fragmentSource: webGpu ? ORB_FRAGMENT : ORB_FRAGMENT_GLSL }, {
       attributes: ["position"],
-      uniforms: [...ORB_UNIFORMS],
+      uniforms: webGpu ? [...ORB_UNIFORMS] : [...ORB_UNIFORMS, ...ORB_LEAN_UNIFORMS],
       samplers: ["panoramaCube", "panoramaEquirect"],
-      defines: [...backendDefines, ...defines],
+      defines: withLeanDefine([...backendDefines, ...defines], leanShaders()),
       shaderLanguage,
       needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
     });
@@ -406,6 +523,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       material.depthFunction = Constants.ALWAYS;
       material.disableDepthWrite = true;
     }
+    orbMaterials.add(material);
+    material.onDisposeObservable.addOnce(() => orbMaterials.delete(material));
     return material;
   }
 
@@ -473,7 +592,14 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         target.setVector3("quadV", toVector(quad.v) as never);
         target.setVector3("markerRel", toVector(rel) as never);
         target.setFloat("radius", radius);
-        target.setFloat("tanPreviewHalfAngle", Math.tan((appearance.previewFovDeg * Math.PI) / 360));
+        const tanPreviewHalfAngle = Math.tan((appearance.previewFovDeg * Math.PI) / 360);
+        target.setFloat("tanPreviewHalfAngle", tanPreviewHalfAngle);
+        if (leanShaders()) {
+          const constants = orbDrawConstants(rel, radius, tanPreviewHalfAngle);
+          target.setFloat("sinAlpha", constants.sinAlpha);
+          target.setFloat("windowGain", constants.windowGain);
+          target.setFloat("identityWindow", constants.identityWindow ? 1 : 0);
+        }
         target.setFloat("opacity", opacity);
         // The shader measures the outline in the pixels it draws.
         const devicePerCss = engine.getRenderHeight() / Math.max(1, uniforms.viewportHeightCssPx);
@@ -542,17 +668,19 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   const immersionMesh = available ? new Mesh("panorama-immersion", scene) : null;
   const immersionMaterials = new Map<string, ShaderMaterial>();
   let immersionState: { source: ImmersionSource; next: ImmersionSource | null; mix: number; opacity: number; view: NavigationPresentation | null } | null = null;
-  function immersionMaterial(defines: string[]): ShaderMaterial {
-    const key = defines.join(" ");
+  /** `opaque`: drawn without blending, for immersion at full opacity (the opaqueImmersion experiment). */
+  function immersionMaterial(defines: string[], opaque = false): ShaderMaterial {
+    const all = withLeanDefine(defines, leanShaders());
+    const key = all.join(" ") + (opaque ? " opaque" : "");
     let material = immersionMaterials.get(key);
     if (!material) {
       material = new ShaderMaterial(`panorama-immersion-${key || "cube"}`, scene, { vertexSource: webGpu ? IMMERSION_VERTEX : IMMERSION_VERTEX_GLSL, fragmentSource: webGpu ? IMMERSION_FRAGMENT : IMMERSION_FRAGMENT_GLSL }, {
         attributes: ["position"],
-        uniforms: [...IMMERSION_UNIFORMS],
+        uniforms: webGpu ? [...IMMERSION_UNIFORMS] : [...IMMERSION_UNIFORMS, ...IMMERSION_LEAN_UNIFORMS],
         samplers: ["panoramaCube", "panoramaEquirect", "nextCube", "nextEquirect"],
-        defines: [...backendDefines, ...defines],
+        defines: [...backendDefines, ...all],
         shaderLanguage,
-        needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
+        needAlphaBlending: !opaque && !defines.some(define => define.includes("OUTPUT_")),
       });
       material.onCompiled = onCompiled;
       material.onError = onError;
@@ -578,6 +706,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     material.setFloat("mixWeight", state.mix);
     applyContent(material, state.source.content);
     applyContent(material, (state.next ?? state.source).content, "nextContent");
+    if (leanShaders()) {
+      material.setMatrix("imageFromClip", imageFromClipMatrix(uniforms.inverseViewRotProj, state.source.content, new Matrix()));
+      material.setMatrix("nextImageFromClip", imageFromClipMatrix(uniforms.inverseViewRotProj, (state.next ?? state.source).content, new Matrix()));
+    }
     material.setTexture(state.source.kind === "equirectangular" ? "panoramaEquirect" : "panoramaCube", state.source.texture);
     if (state.next) material.setTexture(state.next.kind === "equirectangular" ? "nextEquirect" : "nextCube", state.next.texture);
   }
@@ -601,11 +733,18 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       record("immersion", frames.current, frames.uniforms);
     }));
   }
+  /** The immersion's material for its state and the experiments now. */
+  function applyImmersionMaterial(): void {
+    if (!immersionMesh || !immersionState) return;
+    // The crossfade blends inside the shader; only a fade from the globe needs the frame behind.
+    const opaque = experiments.opaqueImmersion && immersionState.opacity >= 1;
+    immersionMesh.material = immersionMaterial(immersionDefines(immersionState), opaque);
+  }
   const immersion: PanoramaImmersion = {
     show(state) {
       if (!immersionMesh) return;
       immersionState = state ? { source: state.source, next: state.next ?? null, mix: state.mix ?? 0, opacity: state.opacity ?? 1, view: state.view ?? null } : null;
-      if (immersionState) immersionMesh.material = immersionMaterial(immersionDefines(immersionState));
+      applyImmersionMaterial();
       immersionMesh.setEnabled(immersionState !== null);
       options.requestRender();
     },
@@ -714,8 +853,11 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       rtt.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
       return { output, rtt, mesh, material, observer, ownsMaterial: Boolean(orb) };
     });
-    for (const pass of passes) scene.customRenderTargets.push(pass.rtt);
     try {
+      // A render target renders once and skips a mesh whose shader is not ready,
+      // as a WebGL shader compiling in parallel is not on its first frames.
+      await Promise.all(passes.map(pass => pass.material.forceCompilationAsync(pass.mesh)));
+      for (const pass of passes) scene.customRenderTargets.push(pass.rtt);
       // Every pass renders in the same frame, so every output shares one camera.
       const rendered = Promise.all(passes.map(pass => new Promise<void>(resolve => { pass.rtt.onAfterRenderObservable.addOnce(() => resolve()); })));
       options.requestRender();
@@ -753,8 +895,22 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     pick,
     project,
     probe,
+    setExperiments(next) {
+      const wasLean = leanShaders();
+      Object.assign(experiments, next);
+      if (leanShaders() !== wasLean) {
+        // One compile for all orbs: materials with the same defines share an effect.
+        for (const material of orbMaterials) material.options.defines = withLeanDefine(material.options.defines, leanShaders());
+      }
+      applyImmersionMaterial();
+      frameCache = null;
+      options.requestRender();
+    },
     setUniformDelayFrames(frames) {
       delayFrames = Math.max(0, Math.min(7, Math.round(frames)));
+    },
+    captureDraws(capture) {
+      captureDraws = capture;
     },
     drawRecords: () => records,
     inspectOrb(id, frame) {
