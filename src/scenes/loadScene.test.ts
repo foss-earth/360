@@ -119,6 +119,9 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   };
   const orbs = new Map<string, { state: Record<string, unknown>; expansions: unknown[]; disposed: boolean }>();
   const shown: unknown[] = [];
+  // An orb 2 m in radius is drawn a few tens of pixels across from here: fewer than its smallest preview's faces have texels.
+  const drawn = { radiusMeters: 2, onScreen: true };
+  const fetched: string[] = [];
   const renderer: SceneRenderer = {
     available: options.available ?? true,
     unavailableReason: options.available === false ? "WebGL" : null,
@@ -129,7 +132,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
         id,
         update: next => Object.assign(record.state, next),
         setExpansion: expansion => record.expansions.push(expansion),
-        effectiveRadius: () => 2,
+        effectiveRadius: () => drawn.radiusMeters,
         dispose: () => { record.disposed = true; },
       };
     },
@@ -137,7 +140,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     setAppearance: () => {},
     cameraFrame,
     pick: () => [],
-    project: () => ({ x: 10, y: 10 }),
+    project: () => (drawn.onScreen ? { x: 10, y: 10 } : null),
     dispose: vi.fn(),
   };
 
@@ -159,6 +162,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   const progress: SceneProgress[] = [];
   const backend: ResourceBackend<PanoramaGpuTexture> = {
     async fetch(url) {
+      fetched.push(url);
       if (failing?.test(url)) throw new TypeError("Failed to fetch");
       if (/-tiles\//.test(url)) return new Response(tileHeader(194) as BodyInit, { headers: { "content-type": "image/jpeg" } });
       return new Response(readFileSync(path.join(PUBLIC, new URL(url).pathname)), { headers: { "content-type": "image/jpeg" } });
@@ -202,7 +206,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, tiled, history, settings, failures, progress, backend,
+    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, tiled, history, settings, failures, progress, backend, drawn, fetched,
     clock: () => clock,
     /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
     failFetches: (pattern: RegExp | null) => { failing = pattern; },
@@ -758,10 +762,10 @@ describe("loadScene", () => {
       representation: "whole-1024", loading: null,
       limitation: "The 2048 px image is more than the 1500 px image detail allows.",
     });
-    // Below every whole image: the orb's preview, which is loaded anyway.
+    // Below every whole image: the orb's preview, which is loaded anyway, and at its largest since the panorama was entered.
     h.settings.set("scene.panorama.immersionWidth", 256);
     await settle(h, 40);
-    expect(handle.status.immersionDetail!.representation).toBe("preview-128");
+    expect(handle.status.immersionDetail!.representation).toBe("preview-256");
     h.settings.reset("scene.panorama.immersionWidth");
     await settle(h, 40);
     expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
@@ -1020,5 +1024,148 @@ describe("loadScene", () => {
     expect(handle.status.renderingAvailable).toBe(false);
     expect(handle.status.entries.every(entry => entry.preview === "failed" && entry.message === "WebGL")).toBe(true);
     expect(await handle.enter("pair-photo")).toMatchObject({ ok: false, reason: "unavailable" });
+  });
+});
+
+describe("orb previews", () => {
+  const previewOf = (handle: SceneHandle, id: string): string | undefined => handle.status.entries.find(entry => entry.id === id)?.previewDetail?.representation;
+  const previewRequests = (h: ReturnType<typeof harness>): string[] => [...new Set(h.fetched.map(url => /preview-\d+/.exec(url)?.[0]).filter((name): name is string => Boolean(name)))].sort();
+
+  it("loads the smallest preview for an orb drawn small, and nothing sharper until it is drawn larger", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    await settle(h, 20);
+    // The 64 px preview is more than its pixels can show.
+    expect(previewOf(handle, entry.id)).toBe("preview-64");
+    expect(previewRequests(h)).toEqual(["preview-64"]);
+
+    // Five times as large on screen, as zooming toward it does: the 128 px preview, and only that.
+    h.drawn.radiusMeters = 10;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-128");
+    expect(previewRequests(h)).toEqual(["preview-128", "preview-64"]);
+    // Larger again: the largest.
+    h.drawn.radiusMeters = 25;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+    expect(previewRequests(h)).toEqual(["preview-128", "preview-256", "preview-64"]);
+    // Drawn small again, it keeps what it has: nothing smaller is loaded in its place.
+    h.drawn.radiusMeters = 2;
+    const requests = h.fetched.length;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+    expect(h.fetched.length).toBe(requests);
+  });
+
+  it("leaves an orb that is off the screen with the preview it has, however large it would be drawn", async () => {
+    const h = harness();
+    h.drawn.onScreen = false;
+    h.drawn.radiusMeters = 25;
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-64");
+    h.drawn.onScreen = true;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+  });
+
+  it("reports a sharper preview that fails once, keeps the one it has, and does not ask again every frame", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    h.failFetches(/preview-256/);
+    h.drawn.radiusMeters = 25;
+    await settle(h, 30);
+    expect(previewOf(handle, entry.id)).toBe("preview-64");
+    expect(h.failures.map(failure => failure.kind)).toEqual(["preview"]);
+    expect(h.failures[0].message).toMatch(/its sharper preview could not be loaded: .+ The current preview remains available\.$/);
+    expect(h.fetched.filter(url => url.includes("preview-256")).length).toBe(6);
+  });
+
+  it("asks for the largest preview as an entry begins, and the panorama opens on whichever the orb shows", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    expect(previewOf(handle, entry.id)).toBe("preview-64");
+    const entering = handle.enter(entry.id);
+    await settle(h, 80);
+    expect(await entering).toEqual({ ok: true });
+    // It arrived during the entry and took the orb's image; the smaller one is no longer referenced.
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+    expect(previewRequests(h)).toEqual(["preview-256", "preview-64"]);
+    const exiting = handle.exit();
+    await settle(h, 60);
+    expect(await exiting).toEqual({ ok: true });
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+  });
+});
+
+describe("a panorama's tiles while it is being entered", () => {
+  const isTile = (url: string): boolean => /-tiles\//.test(url);
+
+  it("loads the tiles of the view it opens on while the camera is still flying in, into the atlas the panorama then shows", async () => {
+    const h = harness({ placeCamera: true });
+    const handle = await loaded(h, false, withTiles(cardinal, ["equi-angular"]));
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    const entering = handle.enter(entry.id);
+    // A third of the way through the one-second flight.
+    await settle(h, 20);
+    expect(handle.status.phase).toBe("entering");
+    expect(handle.status.immersionDetail).toBeNull();
+    const early = h.fetched.filter(isTile).length;
+    expect(early).toBeGreaterThan(0);
+    expect(h.tiled).toHaveLength(1);
+    expect(h.tiled[0].uploads).toBeGreaterThan(0);
+    await settle(h, 80);
+    expect(await entering).toEqual({ ok: true });
+    // The same atlas, already holding the view: nothing is made or fetched again for it.
+    expect(handle.status.immersionDetail).toMatchObject({ representation: "eac-tiles", loading: null });
+    expect(handle.status.immersionDetail!.tiles).toMatchObject({ complete: true });
+    expect(h.tiled).toHaveLength(1);
+    expect(h.tiled[0].disposed).toBe(false);
+    expect(new Set(h.fetched.filter(isTile)).size).toBe(h.fetched.filter(isTile).length);
+  });
+
+  it("fetches no tiles on the way in when whole images are chosen", async () => {
+    const h = harness({ placeCamera: true });
+    h.settings.set("scene.panorama.representation", "whole");
+    const handle = await loaded(h, false, withTiles(cardinal, ["equi-angular"]));
+    handles.push(handle);
+    const entering = handle.enter(handle.status.entries[0].id);
+    await settle(h, 100);
+    expect(await entering).toEqual({ ok: true });
+    expect(h.fetched.filter(isTile)).toEqual([]);
+    expect(h.tiled).toHaveLength(0);
+  });
+
+  it("keeps what arrived when the flight is cut short, and stops asking", async () => {
+    const h = harness({ placeCamera: true });
+    const handle = await loaded(h, false, withTiles(cardinal, ["equi-angular"]));
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    const cut = new AbortController();
+    const entering = handle.enter(entry.id, { signal: cut.signal });
+    await settle(h, 20);
+    cut.abort();
+    await settle(h, 40);
+    expect((await entering).ok).toBe(false);
+    expect(handle.status.phase).toBe("overview");
+    const asked = h.fetched.filter(isTile).length;
+    expect(asked).toBeGreaterThan(0);
+    await settle(h, 40);
+    expect(h.fetched.filter(isTile).length).toBe(asked);
+    // The atlas waits in the cache: entering again finds it, and makes no second one.
+    const again = handle.enter(entry.id);
+    await settle(h, 100);
+    expect(await again).toEqual({ ok: true });
+    expect(h.tiled).toHaveLength(1);
+    expect(handle.status.immersionDetail!.tiles).toMatchObject({ complete: true });
   });
 });

@@ -384,6 +384,8 @@ interface Preview {
   limitation: string | null;
   message: string | null;
   controller: AbortController | null;
+  /** A sharper preview that failed to load: not asked for again, frame after frame, while the orb stays as large. */
+  failedSharper?: string | null;
 }
 
 interface Entry {
@@ -663,7 +665,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     timedCall(UPLOAD_SECTION, () => uploader?.pump());
     timedCall(TILE_SECTION, tickTiles);
     for (const callback of [...frameCallbacks]) callback();
-    timedCall(PLACEMENT_SECTION, () => { refreshPlacements(); tryApplyOverview(); });
+    timedCall(PLACEMENT_SECTION, () => { refreshPlacements(); tryApplyOverview(); sharpenPreviews(); });
     for (const listener of [...frameListeners]) listener();
     if (started) profiler!.add(FRAME_SECTION, started);
   });
@@ -792,6 +794,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
 
   function unmount(): void {
+    stopWarming();
     overviewPreparation?.abort();
     overviewPreparation = null;
     overviewPreparedView = null;
@@ -804,31 +807,77 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     entries = new Map();
   }
 
-  /** The preview that meets the orb's largest on-screen size at the asked density, within its range and the budget. */
-  function choosePreview(entry: Entry, first = false): { representation: ResolvedRepresentation; limitation: string | null } | null {
-    const diameter = range("scene.panorama.markerDiameter").max * devicePixelsPerCss();
-    const wanted = previewFaceTexels(diameter, previewHalfAngle(), num("scene.panorama.previewDensity"));
+  /**
+   * The preview for an orb drawn `diameterPx` device pixels across, at the
+   * asked density, within its range and the budget; null asks for the
+   * smallest allowed, an orb's first.
+   */
+  function choosePreview(entry: Entry, diameterPx: number | null): { representation: ResolvedRepresentation; limitation: string | null } | null {
     const faces = range("scene.panorama.previewFaceRange");
+    const wanted = diameterPx === null ? faces.min : previewFaceTexels(diameterPx, previewHalfAngle(), num("scene.panorama.previewDensity"));
     const previews = entry.asset.representations.filter(rep => rep.role === "preview" && rep.projection === "cube");
     const inRange = previews.filter(rep => rep.projection === "cube" && rep.faceSize >= faces.min && rep.faceSize <= faces.max);
     const pool = inRange.length > 0 ? inRange : previews;
-    const choice = chooseRepresentation(pool, "preview", first ? faces.min : Math.min(Math.max(wanted, faces.min), faces.max), rep => (resources.wouldFit(rep) ? null : "the panorama GPU memory is full (scene.panorama.sourceGpuMiB)"));
+    const choice = chooseRepresentation(pool, "preview", Math.min(Math.max(wanted, faces.min), faces.max), rep => (resources.wouldFit(rep) ? null : "the panorama GPU memory is full (scene.panorama.sourceGpuMiB)"));
     if (!choice) return null;
     const outOfRange = inRange.length === 0 ? `no preview is within ${faces.min}–${faces.max} px (scene.panorama.previewFaceRange)` : null;
     return { representation: choice.representation, limitation: [outOfRange, choice.limitation].filter(Boolean).join("; ") || null };
   }
 
-  /** `reportFailure` is false when entering waits on it, since entering reports its own failure. */
-  function loadPreview(entry: Entry, priority: number, reportFailure = true, sharpen = false): void {
+  /**
+   * An orb's diameter as it is drawn in `frame`, device px; null while it has
+   * no place, or is behind the view or off the screen.
+   */
+  function drawnDiameterPx(entry: Entry, frame: NonNullable<ReturnType<SceneRenderer["cameraFrame"]>>): number | null {
+    const marker = entry.placement.marker;
+    if (!marker || entry.placement.state !== "placed") return null;
+    const radius = entry.orb.effectiveRadius(frame);
+    if (radius === null) return null;
+    const rel = sub(marker, frame.eye);
+    if (!renderer.project(rel, frame)) return null;
+    const distance = Math.max(length(rel), radius);
+    return (radius * frame.viewportHeightCssPx) / (distance * Math.tan(frame.view.verticalFovRad / 2)) * devicePixelsPerCss();
+  }
+
+  /**
+   * Every orb starts with its smallest allowed preview. One drawn with more
+   * pixels than that preview has texels loads the preview its size asks for,
+   * the largest on screen first; an orb that stays small, or out of view, is
+   * left with what it has. Nothing is loaded for a size the orb could reach
+   * and has not.
+   */
+  function sharpenPreviews(): void {
+    if (immersion || !renderer.available || entries.size === 0) return;
+    const frame = renderer.cameraFrame();
+    if (!frame) return;
+    const halfAngle = previewHalfAngle();
+    const density = num("scene.panorama.previewDensity");
+    const largest = range("scene.panorama.markerDiameter").max * devicePixelsPerCss();
+    for (const entry of entries.values()) {
+      const { preview } = entry;
+      if (preview.state !== "ready" || preview.controller || !preview.handle) continue;
+      const diameter = drawnDiameterPx(entry, frame);
+      if (diameter === null || previewFaceTexels(diameter, halfAngle, density) <= representationFaceTexels(preview.handle.representation)) continue;
+      // Behind every orb's first preview (1) and an entered image; among themselves, the largest orb first.
+      loadPreview(entry, Math.min(0.99, diameter / Math.max(1, largest)), true, diameter);
+    }
+  }
+
+  /**
+   * Loads an orb's first preview, or with `diameterPx` the sharper one an orb
+   * drawn that large needs. `reportFailure` is false when entering waits on
+   * it, since entering reports its own failure.
+   */
+  function loadPreview(entry: Entry, priority: number, reportFailure = true, diameterPx: number | null = null): void {
+    const sharpen = diameterPx !== null;
     if (entry.preview.controller || (entry.preview.state === "ready" && !sharpen)) return;
-    if (sharpen && (target === entry.record.id || immersion?.id === entry.record.id)) return;
     const previous = entry.preview.handle;
     const failed = (cause: string): void => {
       if (reportFailure) report("preview", entry, cause, previous
         ? `${entry.record.title}: its sharper preview could not be loaded: ${sentence(cause)} The current preview remains available.`
         : `${entry.record.title}: its preview could not be loaded: ${sentence(cause)}`);
     };
-    const choice = choosePreview(entry, !sharpen);
+    const choice = choosePreview(entry, diameterPx);
     if (!choice) {
       if (previous) return;
       entry.preview = { ...entry.preview, state: "failed", message: "No preview fits the panorama GPU memory (scene.panorama.sourceGpuMiB)." };
@@ -836,10 +885,11 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       emit();
       return;
     }
-    if (choice.representation.id === previous?.representation.id) return;
+    // Only ever sharper: nothing smaller is loaded to take a preview's place, and one that failed is left alone.
+    if (previous && (representationFaceTexels(choice.representation) <= representationFaceTexels(previous.representation) || entry.preview.failedSharper === choice.representation.id)) return;
     const controller = new AbortController();
     const loadingGeneration = generation;
-    entry.preview = { state: previous ? "ready" : "loading", handle: previous, limitation: choice.limitation, message: null, controller };
+    entry.preview = { ...entry.preview, state: previous ? "ready" : "loading", handle: previous, limitation: choice.limitation, message: null, controller };
     emit();
     resources.acquire(entry.asset, choice.representation, { signal: controller.signal, priority }).then(handle => {
       // A late arrival for a replaced or disposed scene is released, never shown.
@@ -849,15 +899,16 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       }
       entry.preview = { state: "ready", handle, limitation: choice.limitation, message: null, controller: null };
       entry.orb.update({ texture: handle.texture.texture });
-      previous?.release();
+      // A panorama still showing the smaller preview keeps it, and releases it when it shows something else.
+      if (previous && immersion?.shown.handle !== previous) previous.release();
       runtime.requestRender();
       emit();
-      // Every orb gets its smallest allowed preview first. Sharpening waits
-      // behind those first previews, while an entered image has higher priority.
-      if (!sharpen) loadPreview(entry, 0, reportFailure, true);
     }, error => {
       if (disposed || loadingGeneration !== generation || controller.signal.aborted) return;
-      entry.preview = { state: previous ? "ready" : "failed", handle: previous, limitation: null, message: error instanceof Error ? error.message : String(error), controller: null };
+      entry.preview = {
+        state: previous ? "ready" : "failed", handle: previous, limitation: null, message: error instanceof Error ? error.message : String(error), controller: null,
+        ...(previous ? { failedSharper: choice.representation.id } : {}),
+      };
       failed(entry.preview.message!);
       emit();
     });
@@ -1059,10 +1110,16 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return controller;
   }
 
+  /**
+   * The orb's preview, loaded if it is not yet; and, on its way from here,
+   * the largest preview allowed, since the entry opens the orb's image out
+   * across the whole view. That one replaces the orb's image whenever it
+   * arrives, so everything after this reads `entry.preview.handle` when it
+   * draws, never a handle kept from before.
+   */
   async function ensurePreview(entry: Entry, signal: AbortSignal): Promise<SourceHandle<PanoramaGpuTexture>> {
-    // Entry uses the image already shown, with no background preview replacing
-    // its shared reference during the flight into it.
     if (entry.preview.state === "ready") {
+      // A sharper preview on its way for the orb's size on the map gives way to the largest.
       entry.preview.controller?.abort();
       entry.preview.controller = null;
     }
@@ -1078,6 +1135,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       });
     }
     if (entry.preview.state !== "ready" || !entry.preview.handle) throw new Error(entry.preview.message ?? `${entry.record.title} has no preview.`);
+    loadPreview(entry, 10, false, Number.POSITIVE_INFINITY);
     return entry.preview.handle;
   }
 
@@ -1123,9 +1181,57 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return [state.shown, state.incoming].filter((each): each is { handle: SourceHandle<PanoramaGpuTexture>; entry: Entry } => Boolean(each?.handle.texture.tiles));
   }
 
+  /**
+   * The tiles of a panorama being entered, loading for the view it will open
+   * on while the camera is still on its way in: the second the flight takes
+   * is most of what the view's tiles need to arrive. The atlas is the one the
+   * panorama then shows, found in the resources' cache with its tiles on it.
+   */
+  let warming: { entry: Entry; view: NavigationPresentation; handle: SourceHandle<PanoramaGpuTexture> | null; controller: AbortController } | null = null;
+
+  function warmTiles(entry: Entry, view: GeoView): void {
+    stopWarming();
+    if (!renderer.available) return;
+    const { representation } = preferredTilesOf(entry.asset, new Set());
+    // Where the panorama would not show tiles, nothing is fetched for them.
+    if (!representation || !tileAtlasLayout(representation, num("scene.panorama.tileMemoryMiB") * MIB, deviceMaxSide()) || !resources.wouldFit(representation, true)) return;
+    const controller = new AbortController();
+    const state: NonNullable<typeof warming> = { entry, view: presentation(entry, view), handle: null, controller };
+    warming = state;
+    resources.acquire(entry.asset, representation, { signal: controller.signal, priority: 5, overlap: true, ...(entry.preview.handle ? { fallback: entry.preview.handle.representation } : {}) }).then(handle => {
+      if (warming !== state || controller.signal.aborted) { handle.release(); return; }
+      // A cached atlas comes back with the settings of its last use.
+      handle.texture.tiles?.panorama.setLimits(tileLimits());
+      state.handle = handle;
+      runtime.requestRender();
+    }, () => {
+      // The panorama asks again once it is entered, and says then what went wrong.
+      if (warming === state) warming = null;
+    });
+  }
+
+  /** Ends the warming, or only `entry`'s when another entry may have begun one since: the atlas stays in the cache, with what arrived, for whoever asks next. */
+  function stopWarming(entry?: Entry): void {
+    const state = warming;
+    if (!state || (entry && state.entry !== entry)) return;
+    warming = null;
+    state.controller.abort();
+    state.handle?.release();
+  }
+
   let tileDigest = "";
-  /** One frame of every live tiled cube, with the view as it is drawn this frame. */
+  /** One frame of every live tiled cube, with the view as it is drawn this frame; and of one warming, with the view it will open on. */
   function tickTiles(): void {
+    const at = now();
+    const warm = warming?.handle?.texture.tiles ? warming : null;
+    if (warm) {
+      const frame = renderer.cameraFrame(warm.view);
+      if (frame) {
+        const { panorama } = warm.handle!.texture.tiles!;
+        const heightPx = engine?.getRenderHeight() ?? frame.viewportHeightCssPx * devicePixelsPerCss();
+        if (panorama.tick(at, tileViewOf(frame, warm.entry.content, heightPx), tileParameters(panorama.representation))) runtime.requestRender();
+      }
+    }
     const state = immersion;
     if (!state || state.leaving) return;
     const live = liveTiles(state);
@@ -1133,7 +1239,6 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const frame = renderer.cameraFrame(runtime.getPresentationView());
     if (!frame) return;
     const heightPx = engine?.getRenderHeight() ?? frame.viewportHeightCssPx * devicePixelsPerCss();
-    const at = now();
     let busy = false;
     for (const { handle, entry } of live) {
       const { panorama } = handle.texture.tiles!;
@@ -1188,10 +1293,15 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
    * else the other. `note` says why it is not what was asked for.
    */
   function preferredTiles(state: Immersion): { representation: ResolvedTiledCube | null; note: string | null } {
+    return preferredTilesOf(state.shown.entry.asset, state.failedTiles);
+  }
+
+  /** The tiled cube of `asset` that the Representation setting asks for, or the one it has; `failed` are left out. */
+  function preferredTilesOf(asset: ResolvedAsset, failed: ReadonlySet<string>): { representation: ResolvedTiledCube | null; note: string | null } {
     const preference = settings.get("scene.panorama.representation");
     if (preference === "whole") return { representation: null, note: null };
     const warp: ResolvedTiledCube["warp"] = preference === "cube-tiles" ? "gnomonic" : "equi-angular";
-    const offered = state.shown.entry.asset.representations.filter((rep): rep is ResolvedTiledCube => rep.projection === "tiled-cube" && !state.failedTiles.has(rep.id));
+    const offered = asset.representations.filter((rep): rep is ResolvedTiledCube => rep.projection === "tiled-cube" && !failed.has(rep.id));
     const exact = offered.find(rep => rep.warp === warp);
     if (exact) return { representation: exact, note: null };
     if (offered[0]) return { representation: offered[0], note: `This panorama has no ${tilesName(warp)}, so it shows its ${tilesName(offered[0].warp)} (360 image settings → Image).` };
@@ -1660,8 +1770,10 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     // The runtime ending the lease (device loss, teardown) ends the entry too.
     const endWithLease = (): void => op.abort(new DOMException("Navigation ended.", "AbortError"));
     try {
-      const handle = await ensurePreview(entry, signal);
+      const first = await ensurePreview(entry, signal);
       if (signal.aborted) throw signal.reason;
+      // The orb's preview as it is when it is drawn: a sharper one may take its place during the entry.
+      const shownPreview = (): SourceHandle<PanoramaGpuTexture> => entry.preview.handle ?? first;
       // Not ended by the entry's signal: a flight cut short keeps the lease while it coasts. Every way out releases it.
       const acquired = runtime.acquireNavigation({ owner: "foss-earth.scenes", inputContext: "panorama", terrain: "paused" });
       if (!acquired.ok) {
@@ -1683,7 +1795,6 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         up: { x: frame.view.up[0], y: frame.view.up[1], z: frame.view.up[2] },
         verticalFovRad: frame.view.verticalFovRad,
       });
-      const source = sourceOf(entry, handle);
       const marker = entry.placement.marker;
       const betaR = previewHalfAngle();
       const held = acquired.lease;
@@ -1701,7 +1812,11 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
           return radius === null ? null : { rel, distance, startRadius, radius };
         })()
         : null;
+      // The view the panorama settles on, known before the camera moves: its tiles load from here.
+      const openingOn = (arriving: GeoView): GeoView => arrivalFor(entry, arriving, enterOptions.view);
       if (flight && marker) {
+        const landing = flight.pose(1);
+        warmTiles(entry, openingOn(viewFromPresentation(entry.frame, { position: ecef(landing.position), forward: ecef(landing.forward), up: ecef(landing.up), verticalFovRad: landing.verticalFovRad })));
         // Fly the globe camera into the orb, a sphere of its size on screen when the flight began, until it is inside it.
         const underway: Flying = { flight, marker, durationMs: flightMs, startedMs: now(), t: 0, reveal: s => s };
         flying = underway;
@@ -1716,10 +1831,11 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         if (!handoffReady(orbGeometry(sub(marker, end.position), flight.radiusMeters), poseView(end, frame.view.aspect), betaR)) throw new Error("The flight did not end inside the orb; this is a defect.");
         // Handoff: inside the sphere every ray shows the image itself, so the fullscreen image equals the orb's last frame.
         incoming = viewFromPresentation(entry.frame, { position: ecef(end.position), forward: ecef(end.forward), up: ecef(end.up), verticalFovRad: end.verticalFovRad });
-        renderer.immersion.show({ source });
+        renderer.immersion.show({ source: sourceOf(entry, shownPreview()) });
         lease.setPresentationView(presentation(entry, incoming));
         entry.orb.setExpansion(null);
       } else if (expansion) {
+        warmTiles(entry, openingOn(incoming));
         // Grow a virtual sphere about the fixed marker until it covers the view and its rays equal the view's.
         await animate(num("scene.panorama.expandDuration"), t => {
           const eased = smooth(t);
@@ -1727,20 +1843,22 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         }, signal, lease);
         if (!handoffReady(orbGeometry(expansion.rel, expansion.radius), frame.view, betaR)) throw new Error("The expanded orb did not cover the view; this is a defect.");
         // Handoff: identical rays, so the fullscreen image equals the orb's last frame.
-        renderer.immersion.show({ source });
+        renderer.immersion.show({ source: sourceOf(entry, shownPreview()) });
         lease.setPresentationView(presentation(entry, incoming));
         entry.orb.setExpansion(null);
       } else {
         // No continuous reveal from here (behind, inside, off screen or reduced motion): fade in the arrival view.
         const view = arrivalFor(entry, incoming, enterOptions.view);
         const target = presentation(entry, view);
+        warmTiles(entry, view);
         const fade = reducedMotion() ? num("scene.panorama.reducedFadeDuration") : num("scene.panorama.fadeDuration");
-        await animate(fade, t => renderer.immersion.show({ source, opacity: smooth(t), view: target }), signal, lease);
-        renderer.immersion.show({ source });
+        await animate(fade, t => renderer.immersion.show({ source: sourceOf(entry, shownPreview()), opacity: smooth(t), view: target }), signal, lease);
+        renderer.immersion.show({ source: sourceOf(entry, shownPreview()) });
         lease.setPresentationView(target);
         incoming = view;
       }
       stopCancelling();
+      const handle = shownPreview();
       const state = startImmersion(lease, entry, handle, incoming, { representation: handle.representation.id, limitation: entry.preview.limitation, loading: null });
       immersion = state;
       phase = "immersive";
@@ -1752,6 +1870,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       }
       emit();
       refine(state);
+      // The panorama now waits on the same atlas, so the warming's hold on it can go.
+      stopWarming(entry);
       void arrive(state, arrivalFor(entry, incoming, enterOptions.view));
       return { ok: true };
     } catch (error) {
@@ -1782,6 +1902,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       return result;
     } finally {
       stopCancelling();
+      stopWarming(entry);
       lease?.signal.removeEventListener("abort", endWithLease);
       if (operation === op) operation = null;
     }
@@ -1801,8 +1922,10 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     target = entry.record.id;
     emit();
     try {
-      const handle = await ensurePreview(entry, signal);
+      const first = await ensurePreview(entry, signal);
       if (immersion !== state) throw new DOMException("Immersion ended.", "AbortError");
+      // As on entering from the map: the destination's preview as it is when it is drawn.
+      const shownPreview = (): SourceHandle<PanoramaGpuTexture> => entry.preview.handle ?? first;
       phase = "entering";
       emit();
       const look = state.look.get();
@@ -1816,13 +1939,14 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       const toView = presentation(entry, view);
       await animate(fade, t => {
         // Two different places: a crossfade of the images, each drawn in its own frame.
-        renderer.immersion.show({ source: sourceOf(from.entry, from.handle), next: sourceOf(entry, handle), mix: smooth(t), view: t < 0.5 ? fromView : toView });
+        renderer.immersion.show({ source: sourceOf(from.entry, from.handle), next: sourceOf(entry, shownPreview()), mix: smooth(t), view: t < 0.5 ? fromView : toView });
       }, signal, state.lease);
       if (immersion !== state) throw new DOMException("Immersion ended.", "AbortError");
       state.refine?.abort();
       dropIncoming(state);
       state.failedTiles.clear();
       if (from.handle !== from.entry.preview.handle) from.handle.release();
+      const handle = shownPreview();
       state.shown = { handle, entry };
       state.id = entry.record.id;
       state.detail = { representation: handle.representation.id, limitation: entry.preview.limitation, loading: null };
@@ -2008,6 +2132,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   cleanups.push(runtime.onDeviceLost(() => {
     // The runtime already ended the lease; every GPU source is gone.
     uploader?.cancelAll("The GPU device was lost.");
+    stopWarming();
     resources.invalidateDevice();
     for (const entry of entries.values()) {
       entry.preview.controller?.abort();
