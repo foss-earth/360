@@ -874,7 +874,8 @@ describe("loadScene", () => {
     expect(await exiting).toEqual({ ok: true });
     const createTiles = h.backend.createTiles;
     h.backend.createTiles = () => Promise.reject(new Error("the atlas could not be made"));
-    h.settings.set("scene.panorama.tileMemoryMiB", 32);
+    // Room for fewer tiles than the cube's 30 is another atlas, so it is made again.
+    h.settings.set("scene.panorama.tileMemoryMiB", 2);
     entering = handle.enter(entry.id);
     await settle(h, 60);
     expect(await entering).toEqual({ ok: true });

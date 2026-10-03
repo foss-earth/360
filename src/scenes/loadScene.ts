@@ -58,6 +58,7 @@ import {
   type Vec3,
 } from "./panoramaMath";
 import { flightIn, flightMotion, flightOut, glideSettling, poseView, type Flight, type FlightPose } from "./panoramaFlight";
+import { sceneMediaStore, setSceneMediaLimits } from "./mediaStore";
 import { createPanoramaResources, resourceSettingsFrom, ResourceRefusal, type ResourceBackend, type SourceHandle } from "./panoramaResources";
 import { createBrowserSceneHistory, type SceneHistoryAdapter, type SceneHistoryEntry } from "./sceneHistory";
 import { interpolateView, presentationFromView, snapshotFromOverview, viewFromPresentation, type GeoView } from "./sceneView";
@@ -146,7 +147,9 @@ export interface ImmersionDetailStatus {
     levelWanted: number;
     finestLevel: number;
     loading: number;
+    /** Bytes downloaded for tiles, and the tiles that came from the images kept between visits instead. */
     receivedBytes: number;
+    reusedTiles: number;
     /** Tiles held in the atlas, and its slots. */
     resident: number;
     slots: number;
@@ -606,7 +609,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       // Allocating the texture and queueing its rows: what finishing a decode costs the frame.
       uploadCube: (faces, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadCube(faces, label)) : refuse()),
       uploadEquirect: (image, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadEquirect(image, label)) : refuse()),
-      async createTiles(representation, layout, label) {
+      async createTiles(representation, layout, label, saved) {
         if (!scene || !gpuUploader) return refuse();
         const cells = representation.faceSize / representation.tileSize;
         const atlas = createPanoramaTileAtlas(scene, layout, cells, label);
@@ -623,6 +626,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
           release: image => image.close(),
           limits: tileLimits(),
           wake: () => runtime.requestRender(),
+          saved,
         });
         return {
           kind: "tiles", width: representation.faceSize, height: representation.faceSize, levels: representation.levelBytes.length,
@@ -631,8 +635,13 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         };
       },
       maxTextureSide: deviceMaxSide,
+      media: sceneMediaStore,
     };
   })();
+  // What may be kept between visits: the page's one store follows the parameter.
+  const applySavedLimit = (): void => setSceneMediaLimits({ maxBytes: num("scene.panorama.savedMiB") * MIB });
+  applySavedLimit();
+  cleanups.push(settings.watch("scene.panorama.savedMiB", applySavedLimit));
   const resources = createPanoramaResources(backend, resourceSettingsFrom(id => settings.get(id), detailCap()), progress => {
     if (disposed) return;
     const entry = [...entries.values()].find(entry => entry.asset.id === progress.assetId && entry.asset.representations.includes(progress.representation));
@@ -1146,7 +1155,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     return {
       tiles: {
         inView: stats.inView, shownInView: stats.shownInView, levelWanted: stats.levelWanted, finestLevel: tiles.panorama.tiling.maxLevel,
-        loading: stats.loading, receivedBytes: stats.receivedBytes, resident: stats.resident, slots: stats.slots, complete: stats.complete,
+        loading: stats.loading, receivedBytes: stats.receivedBytes, reusedTiles: stats.reusedTiles, resident: stats.resident, slots: stats.slots, complete: stats.complete,
       },
     };
   }

@@ -109,7 +109,7 @@ const kibibytes = (bytes: number): string => (bytes >= 1024 * 1024 ? `${(bytes /
 /** How far a tiled cube on screen has got with the view: "38 of 40 tiles in view, level 3 of 3; 412 KiB downloaded." */
 function tilesProgress(tiles: NonNullable<NonNullable<SceneStatus["immersionDetail"]>["tiles"]>): string {
   const state = tiles.complete ? "every tile the view needs is on screen" : `${tiles.shownInView} of ${tiles.inView} tiles in view on screen${tiles.loading ? `, ${tiles.loading} loading` : ""}`;
-  return `${state.charAt(0).toUpperCase()}${state.slice(1)}, at level ${tiles.levelWanted} of ${tiles.finestLevel}; ${tiles.resident} of ${tiles.slots} tiles held, ${kibibytes(tiles.receivedBytes)} downloaded.`;
+  return `${state.charAt(0).toUpperCase()}${state.slice(1)}, at level ${tiles.levelWanted} of ${tiles.finestLevel}; ${tiles.resident} of ${tiles.slots} tiles held, ${kibibytes(tiles.receivedBytes)} downloaded${tiles.reusedTiles ? `, ${tiles.reusedTiles} ${tiles.reusedTiles === 1 ? "tile" : "tiles"} from saved images` : ""}.`;
 }
 
 function offeredText(images: readonly SceneImageStatus[]): string {
