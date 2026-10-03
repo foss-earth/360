@@ -60,6 +60,12 @@ import {
   toSrgbImage,
 } from "./lib/panoramaImage.mjs";
 
+/**
+ * Part of every asset's revision. Raise it with any change that makes this
+ * tool write other bytes for the same input and settings (the encoder, the
+ * resampling, a file's name): loaders keep files under the revision between
+ * visits and never ask for them again (docs/scenes/format.md, "Saved images").
+ */
 const TOOL_VERSION = "1";
 /** A stored tile's texels past its edge, on every side: one bilinear tap never reads another tile. */
 const TILE_GUTTER = 1;
