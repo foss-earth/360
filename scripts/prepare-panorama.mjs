@@ -2,11 +2,12 @@
 /**
  * Prepares one panorama for a `foss-earth-scene` v1 manifest: validates the
  * input, its pose and colour; applies EXIF orientation once and converts to
- * opaque sRGB; and writes preview cubes and whole immersion variants from the
- * one normalized image, with a manifest fragment and a provenance record.
+ * opaque sRGB; and writes preview cubes, whole immersion variants and tiled
+ * cubes from the one normalized image, with a manifest fragment and a
+ * provenance record.
  *
  *   node scripts/prepare-panorama.mjs --input garden.jpg --pose garden-pose.json \
- *     --preview-face-sizes 64,128,256 --immersion-widths 2048,4096 \
+ *     --preview-face-sizes 64,128,256 --immersion-widths 2048,4096 --tiles eac,cube \
  *     --out build/prepared-scenes/garden
  *
  * Input: a full 2:1 equirectangular JPEG or PNG, or `synthetic:cardinal[:width]`
@@ -18,6 +19,11 @@
  * Options:
  *   --preview-face-sizes 64,128   preview cube face sizes, px (at least one)
  *   --immersion-widths 2048,4096  whole equirectangular immersion widths, px (none: preview-only)
+ *   --tiles eac,cube              tiled cubes for looking around (docs/scenes/format.md, "Tiled cubes"):
+ *                                 equi-angular (eac) and ordinary (cube); none by default
+ *   --tile-size 192               a tile's texels a side; a stored tile adds a gutter texel on every side
+ *   --tile-face-size 1536         the finest face, texels: the tile size times a power of two. Default the
+ *                                 largest that is at most the input width / 4, its density at the horizon
  *   --encoding jpeg|png           output files (jpeg)
  *   --quality 90                  JPEG quality, 1–100
  *   --asset-id id                 the asset's id (from the input's name)
@@ -37,6 +43,7 @@ import {
   applyOrientation,
   colourIsSrgb,
   CUBE_FACE_NAMES,
+  cropImage,
   decodeJpeg,
   decodePng,
   dropOpaqueAlpha,
@@ -46,6 +53,7 @@ import {
   makeCardinalPanorama,
   readGPano,
   renderCubeFace,
+  renderTileFace,
   resizeArea,
   sniffImage,
   toLinearImage,
@@ -53,6 +61,9 @@ import {
 } from "./lib/panoramaImage.mjs";
 
 const TOOL_VERSION = "1";
+/** A stored tile's texels past its edge, on every side: one bilinear tap never reads another tile. */
+const TILE_GUTTER = 1;
+const TILE_WARPS = { eac: "equi-angular", cube: "gnomonic" };
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scriptPath = fileURLToPath(import.meta.url);
 
@@ -170,6 +181,10 @@ function main() {
   const quality = Number(options.quality ?? 90);
   if (!(quality >= 1 && quality <= 100)) throw new Error("--quality is 1 to 100");
   if (!options.attribution) throw new Error("--attribution is required: the credit shown while the image is visible");
+  const tileKinds = (options.tiles ?? "").split(",").filter(Boolean);
+  for (const kind of tileKinds) if (!TILE_WARPS[kind]) throw new Error(`--tiles: ${kind} is not eac or cube`);
+  const tileSize = Number(options["tile-size"] ?? 192);
+  if (!Number.isInteger(tileSize) || tileSize < 8) throw new Error("--tile-size is a whole number of texels, 8 or more");
 
   const { image, source, gpano } = readInput(options.input);
   checkCoverage(image, gpano);
@@ -179,6 +194,13 @@ function main() {
   }
   for (const size of previewSizes) {
     if (size > image.width / 4) throw new Error(`--preview-face-sizes: ${size} is larger than the ${image.width / 4} texels a face of this input holds`);
+  }
+  // The finest tiled face: at most the input's own density at the horizon, a quarter of its width.
+  let tileFaceSize = options["tile-face-size"] === undefined ? tileSize : Number(options["tile-face-size"]);
+  if (options["tile-face-size"] === undefined) while (tileFaceSize * 2 <= image.width / 4) tileFaceSize *= 2;
+  if (tileKinds.length) {
+    if (!Number.isInteger(Math.log2(tileFaceSize / tileSize))) throw new Error(`--tile-face-size: ${tileFaceSize} is not ${tileSize} times a power of two`);
+    if (tileFaceSize > image.width / 4) throw new Error(`--tile-face-size: ${tileFaceSize} is larger than the ${image.width / 4} texels a face of this input holds`);
   }
 
   const out = options.out ? path.resolve(options.out) : datedOutput();
@@ -218,9 +240,41 @@ function main() {
     const encodedBytes = write(relative, encode(toSrgbImage(resized)), width, width / 2);
     representations.push({ id: `whole-${width}`, role: "immersion", projection: "equirectangular", width, height: width / 2, mimeType, encodedBytes, url: `${prefix}${relative}` });
   }
+  // Tiled cubes: every level resampled from the source, each face with its gutter, cut into tiles.
+  const tileSets = [];
+  for (const kind of tileKinds) {
+    const warp = TILE_WARPS[kind];
+    const folder = `${kind}-tiles`;
+    const stored = tileSize + 2 * TILE_GUTTER;
+    const levelBytes = [];
+    const files = [];
+    for (let level = 0, size = tileSize; size <= tileFaceSize; level++, size *= 2) {
+      let bytesOfLevel = 0;
+      CUBE_FACE_NAMES.forEach(face => {
+        const srgb = toSrgbImage(renderTileFace(pyramid, face, size, warp, TILE_GUTTER));
+        for (let y = 0; y < size / tileSize; y++) for (let x = 0; x < size / tileSize; x++) {
+          const relative = `${folder}/${face}/${level}/${x}/${y}.${extension}`;
+          const bytes = encode(cropImage(srgb, x * tileSize, y * tileSize, stored, stored));
+          const file = path.join(out, relative);
+          mkdirSync(path.dirname(file), { recursive: true });
+          writeFileSync(file, bytes);
+          files.push(`${relative} ${sha256(bytes)}`);
+          bytesOfLevel += bytes.length;
+        }
+      });
+      levelBytes.push(bytesOfLevel);
+    }
+    const encodedBytes = levelBytes.reduce((sum, bytes) => sum + bytes, 0);
+    representations.push({ id: folder, role: "immersion", projection: "tiled-cube", warp, faceSize: tileFaceSize, tileSize, gutter: TILE_GUTTER, levelBytes, mimeType, encodedBytes, url: `${prefix}${folder}/` });
+    // One provenance entry for the set: its files' paths and hashes, hashed in order.
+    tileSets.push({ path: `${folder}/`, files: files.length, bytes: encodedBytes, sha256: sha256(Buffer.from(files.join("\n"))), faceSize: tileFaceSize, tileSize, gutter: TILE_GUTTER, warp });
+  }
 
   const identity = source.sha256 ?? sha256(Buffer.from(JSON.stringify(source)));
-  const settings = { previewSizes, immersionWidths, encoding, quality, pose: { headingDeg: pose.headingDeg, pitchDeg: pose.pitchDeg, rollDeg: pose.rollDeg } };
+  const settings = {
+    previewSizes, immersionWidths, encoding, quality, pose: { headingDeg: pose.headingDeg, pitchDeg: pose.pitchDeg, rollDeg: pose.rollDeg },
+    ...(tileKinds.length ? { tiles: { kinds: tileKinds, tileSize, faceSize: tileFaceSize, gutter: TILE_GUTTER } } : {}),
+  };
   const revision = options.revision ?? sha256(Buffer.from(`${identity}\n${TOOL_VERSION}\n${JSON.stringify(settings)}`)).slice(0, 12);
   const attribution = {
     text: options.attribution,
@@ -242,11 +296,13 @@ function main() {
     gpano,
     pose,
     settings,
-    processing: "EXIF orientation applied once; colour checked as sRGB and not converted; opaque alpha dropped; resampled in linear light and encoded to sRGB once. Faces follow the format's cube table.",
+    processing: "EXIF orientation applied once; colour checked as sRGB and not converted; opaque alpha dropped; resampled in linear light and encoded to sRGB once. Faces follow the format's cube table; tiled faces carry a gutter resampled past their edges.",
     outputs,
+    ...(tileSets.length ? { tiles: tileSets } : {}),
   };
   writeFileSync(path.join(out, "prepared.json"), `${JSON.stringify(provenance, null, 2)}\n`);
-  console.log(`Prepared ${assetId} (${image.width}×${image.height}) into ${path.relative(process.cwd(), out) || "."}: ${outputs.length} files, ${outputs.reduce((sum, entry) => sum + entry.bytes, 0)} bytes.`);
+  const tileFiles = tileSets.reduce((sum, set) => sum + set.files, 0), tileBytes = tileSets.reduce((sum, set) => sum + set.bytes, 0);
+  console.log(`Prepared ${assetId} (${image.width}×${image.height}) into ${path.relative(process.cwd(), out) || "."}: ${outputs.length + tileFiles} files, ${outputs.reduce((sum, entry) => sum + entry.bytes, 0) + tileBytes} bytes.`);
 }
 
 try {

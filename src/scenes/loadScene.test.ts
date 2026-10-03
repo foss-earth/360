@@ -13,6 +13,26 @@ import { createMemorySceneHistory } from "./sceneHistory";
 import { enuFrame, geodeticPoint, scale, add, sub, length, dot, vec3, type Vec3 } from "./panoramaMath";
 import { INSIDE_SHARE, orbitAngles } from "./panoramaFlight";
 import type { ResourceBackend } from "./panoramaResources";
+import { createTiledPanorama } from "./tiles/tiledPanorama";
+
+/** The smallest JPEG header the loader reads: a start-of-frame of `side` × `side` pixels. */
+function tileHeader(side: number): Uint8Array {
+  const bytes = new Uint8Array(100);
+  bytes.set([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, side >> 8, side & 0xff, side >> 8, side & 0xff, 0x03]);
+  return bytes;
+}
+
+/** The cardinal scene with two tiled cubes of 384-texel faces in 192-texel tiles, levels 0 and 1, `warps` of them. */
+function withTiles(document: Record<string, unknown>, warps: ("equi-angular" | "gnomonic")[] = ["equi-angular", "gnomonic"]): Record<string, unknown> {
+  const copy = JSON.parse(JSON.stringify(document)) as { assets: { representations: unknown[] }[] };
+  for (const warp of warps) {
+    copy.assets[0].representations.push({
+      id: warp === "equi-angular" ? "eac-tiles" : "cube-tiles", role: "immersion", projection: "tiled-cube", warp, mimeType: "image/jpeg",
+      encodedBytes: 3000, faceSize: 384, tileSize: 192, gutter: 1, levelBytes: [600, 2400], url: `media/cardinal-grid/${warp}-tiles/`,
+    });
+  }
+  return copy as unknown as Record<string, unknown>;
+}
 
 const GROUND = 250;
 const MANIFEST_URL = "https://foss-earth.test/examples/panorama-scenes/campus-pair.scene.json";
@@ -122,6 +142,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   };
 
   const textures: { disposed: boolean }[] = [];
+  const tiled: { uploads: number; tables: number; disposed: boolean }[] = [];
   let pendingUploads: (() => void)[] = [];
   let holdUploads = false;
   const texture = (kind: "cube" | "equirectangular"): PanoramaGpuTexture => {
@@ -139,11 +160,34 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
   const backend: ResourceBackend<PanoramaGpuTexture> = {
     async fetch(url) {
       if (failing?.test(url)) throw new TypeError("Failed to fetch");
+      if (/-tiles\//.test(url)) return new Response(tileHeader(194) as BodyInit, { headers: { "content-type": "image/jpeg" } });
       return new Response(readFileSync(path.join(PUBLIC, new URL(url).pathname)), { headers: { "content-type": "image/jpeg" } });
     },
-    async decode() { return { width: 1, height: 1, close() {} } as unknown as ImageBitmap; },
+    async decode(bytes) {
+      const side = bytes[0] === 0xff && bytes[3] === 0xc0 ? (bytes[7] << 8) | bytes[8] : 1;
+      return { width: side, height: side, close() {} } as unknown as ImageBitmap;
+    },
     uploadCube: () => upload("cube"),
     uploadEquirect: () => upload("equirectangular"),
+    async createTiles(representation, layout) {
+      const record = { uploads: 0, tables: 0, disposed: false };
+      tiled.push(record);
+      const panorama = createTiledPanorama<ImageBitmap>({
+        representation, layout,
+        atlas: { uploadTile: () => { record.uploads += 1; }, setTable: () => { record.tables += 1; }, dispose: () => { record.disposed = true; } },
+        fetch: (url, init) => backend.fetch(url, init), decode: bytes => backend.decode(bytes, "image/jpeg"), release: () => {},
+        limits: { requests: 6, waiting: 12, decodes: 2, uploadsPerFrame: 8, retries: 3, retryDelayMs: 250, fadeMs: 0, timeoutMs: 30_000, responseBytes: 1 << 20 },
+        wake: () => {},
+      });
+      const value = {
+        kind: "tiles" as const, width: representation.faceSize, height: representation.faceSize, levels: 2, gpuBytes: layout.gpuBytes, texture: {} as BaseTexture, complete: true,
+        tiles: { panorama, textures: { atlas: {} as BaseTexture, table: {} as BaseTexture, layout: [2, 192, 1, 194] as const, atlasSize: [layout.width, layout.height] as const, warp: representation.warp, outlines: false } },
+        disposed: false,
+        dispose() { value.disposed = true; panorama.dispose(); },
+      };
+      textures.push(value);
+      return value;
+    },
     maxTextureSide: () => 8192,
   };
   const settings = createSettingsRegistry({ storage: null });
@@ -158,7 +202,7 @@ function harness(options: { available?: boolean; groundReady?: boolean; canvas?:
     },
   });
   return {
-    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, history, settings, failures, progress, backend,
+    load, tick, runtime, owner, orbs, shown, restored, placed, glides, textures, tiled, history, settings, failures, progress, backend,
     clock: () => clock,
     /** Image requests whose URL matches fail as a stopped server's do; null lets them through. */
     failFetches: (pattern: RegExp | null) => { failing = pattern; },
@@ -764,6 +808,79 @@ describe("loadScene", () => {
     await settle(h, 40);
     expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
     expect(h.failures).toHaveLength(1);
+  });
+
+  it("shows equi-angular tiles over the preview at once, loads the view's tiles, and lists them with their progress", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, withTiles(cardinal));
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    expect(entry.images.filter(image => image.projection === "tiled-cube").map(image => [image.id, image.warp, image.tiles, image.aroundPx])).toEqual([
+      ["eac-tiles", "equi-angular", 30, 1536], ["cube-tiles", "gnomonic", 30, 1536],
+    ]);
+    const entering = handle.enter(entry.id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    // No crossfade from the preview: the tiles draw over that same preview.
+    const sources = h.shown.filter(state => state !== null) as { source: { kind: string; tiles?: unknown }; next?: unknown }[];
+    expect(sources.some(state => state.next)).toBe(false);
+    expect(sources.at(-1)!.source.kind).toBe("tiles");
+    const detail = handle.status.immersionDetail!;
+    expect(detail).toMatchObject({ representation: "eac-tiles", limitation: null, loading: null });
+    expect(detail.tiles).toMatchObject({ complete: true, finestLevel: 1 });
+    expect(detail.tiles!.shownInView).toBe(detail.tiles!.inView);
+    expect(h.tiled[0].uploads).toBe(detail.tiles!.resident);
+    expect(h.settings.getReading("scene.panorama.tileMemoryMiB")).toBe(`${detail.tiles!.resident} of ${detail.tiles!.slots} tiles held`);
+  });
+
+  it("switches representation live: tiles load behind a whole image before crossfading, and a revisit finds its tiles held", async () => {
+    const h = harness();
+    const handle = await loaded(h, false, withTiles(cardinal));
+    handles.push(handle);
+    const entering = handle.enter(handle.status.entries[0].id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    h.settings.set("scene.panorama.representation", "whole");
+    await settle(h, 60);
+    expect(handle.status.immersionDetail).toEqual({ representation: "whole-2048", limitation: null, loading: null });
+    // The equi-angular atlas is cached, not disposed.
+    expect(h.tiled[0].disposed).toBe(false);
+    h.settings.set("scene.panorama.representation", "cube-tiles");
+    await settle(h, 60);
+    expect(handle.status.immersionDetail).toMatchObject({ representation: "cube-tiles", loading: null, tiles: { complete: true } });
+    const fades = h.shown.filter(state => (state as { next?: { kind: string } } | null)?.next?.kind === "tiles");
+    expect(fades.length).toBeGreaterThan(0);
+    const before = h.tiled[0].uploads;
+    h.settings.set("scene.panorama.representation", "equi-angular-tiles");
+    await settle(h, 60);
+    expect(handle.status.immersionDetail).toMatchObject({ representation: "eac-tiles", tiles: { complete: true } });
+    expect(h.tiled[0].uploads).toBe(before);
+  });
+
+  it("shows the other tiles when the chosen kind is missing, and whole images when tiles fail", async () => {
+    const h = harness();
+    h.settings.set("scene.panorama.representation", "cube-tiles");
+    const handle = await loaded(h, false, withTiles(cardinal, ["equi-angular"]));
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    let entering = handle.enter(entry.id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    expect(handle.status.immersionDetail).toMatchObject({
+      representation: "eac-tiles", limitation: "This panorama has no cube tiles, so it shows its equi-angular cube tiles (360 image settings → Image).",
+    });
+    const exiting = handle.exit();
+    await settle(h, 60);
+    expect(await exiting).toEqual({ ok: true });
+    const createTiles = h.backend.createTiles;
+    h.backend.createTiles = () => Promise.reject(new Error("the atlas could not be made"));
+    h.settings.set("scene.panorama.tileMemoryMiB", 32);
+    entering = handle.enter(entry.id);
+    await settle(h, 60);
+    expect(await entering).toEqual({ ok: true });
+    expect(handle.status.immersionDetail).toMatchObject({ representation: "whole-2048", loading: null });
+    expect(h.failures.at(-1)).toMatchObject({ kind: "image", message: `${entry.title}: its equi-angular cube tiles could not be shown, so it shows a whole image: the atlas could not be made.` });
+    h.backend.createTiles = createTiles;
   });
 
   it("reports an orb's preview that fails in the background, and entering it once, not twice", async () => {

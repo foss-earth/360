@@ -18,6 +18,7 @@ import {
   RenderTargetTexture,
   ShaderLanguage,
   ShaderMaterial,
+  Vector4,
   VertexData,
   type BaseTexture,
   type Camera,
@@ -42,9 +43,11 @@ import {
   IMMERSION_FRAGMENT,
   IMMERSION_UNIFORMS,
   IMMERSION_VERTEX,
+  NEXT_TILE_SAMPLERS,
   ORB_FRAGMENT,
   ORB_UNIFORMS,
   ORB_VERTEX,
+  TILE_SAMPLERS,
 } from "./panoramaShaders";
 import { IMMERSION_FRAGMENT_GLSL, IMMERSION_LEAN_UNIFORMS, IMMERSION_VERTEX_GLSL, ORB_FRAGMENT_GLSL, ORB_LEAN_UNIFORMS, ORB_VERTEX_GLSL } from "./panoramaShadersWebGL";
 import { isWebGpuEngine } from "./panoramaTextures";
@@ -103,10 +106,26 @@ export interface PanoramaOrb {
   dispose(): void;
 }
 
+/** A tiled cube's GPU side, as its shaders take it (src/scenes/tiles/). */
+export interface TiledSourceTextures {
+  atlas: BaseTexture;
+  table: BaseTexture;
+  /** Cells along a face side, a tile's logical texels, its gutter and its stored side. */
+  layout: readonly [number, number, number, number];
+  /** The atlas's width and height, texels. */
+  atlasSize: readonly [number, number];
+  warp: "equi-angular" | "gnomonic";
+  /** Draws each tile's edges, tinted by its level; read at every draw. */
+  outlines: boolean;
+}
+
 export interface ImmersionSource {
+  /** The cube or equirectangular image; for a tiled cube, the preview cube that shows where no tile has arrived. */
   texture: BaseTexture;
-  kind: "cube" | "equirectangular";
+  kind: "cube" | "equirectangular" | "tiles";
   content: Mat3;
+  /** For kind "tiles". */
+  tiles?: TiledSourceTextures;
 }
 
 export interface PanoramaImmersion {
@@ -511,7 +530,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const material = new ShaderMaterial(name, scene, { vertexSource: webGpu ? ORB_VERTEX : ORB_VERTEX_GLSL, fragmentSource: webGpu ? ORB_FRAGMENT : ORB_FRAGMENT_GLSL }, {
       attributes: ["position"],
       uniforms: webGpu ? [...ORB_UNIFORMS] : [...ORB_UNIFORMS, ...ORB_LEAN_UNIFORMS],
-      samplers: ["panoramaCube", "panoramaEquirect"],
+      samplers: ["panoramaCube", "panoramaEquirect", ...TILE_SAMPLERS],
       defines: withLeanDefine([...backendDefines, ...defines], leanShaders()),
       shaderLanguage,
       needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
@@ -537,6 +556,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     revealMaterial: ShaderMaterial;
     /** The overlay's material for an equirectangular source, made when one is first drawn. */
     revealEquirectMaterial: ShaderMaterial | null;
+    /** The overlay's material for a tiled source. */
+    revealTilesMaterial: ShaderMaterial | null;
     /** Draws the orb's preview, or `source` in its place. */
     applyUniforms(material: ShaderMaterial, uniforms: PanoramaCameraFrame, radius: number, opacity: number, source?: ImmersionSource | null): boolean;
     /** The radius drawn at `distance` in `frame`: the screen-size bounds, then the display scale. */
@@ -545,6 +566,15 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
 
   function applyContent(material: ShaderMaterial, content: Mat3, prefix = "content"): void {
     content.forEach((row, index) => material.setVector3(`${prefix}${index}`, toVector(row) as never));
+  }
+
+  /** A tiled source's atlas, table and layout, under the names its shader takes: `tile…`, or `nextTile…`. */
+  function applyTiles(material: ShaderMaterial, tiles: TiledSourceTextures, next = false): void {
+    const prefix = next ? "nextTile" : "tile";
+    material.setTexture(`${prefix}Atlas`, tiles.atlas);
+    material.setTexture(`${prefix}Table`, tiles.table);
+    material.setVector4(`${prefix}Layout`, new Vector4(...tiles.layout));
+    material.setVector4(`${prefix}AtlasInfo`, new Vector4(tiles.atlasSize[0], tiles.atlasSize[1], tiles.warp === "equi-angular" ? 1 : 0, tiles.outlines ? 1 : 0));
   }
 
   function addOrb(id: string, initial: OrbState): PanoramaOrb {
@@ -579,6 +609,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       material,
       revealMaterial,
       revealEquirectMaterial: null,
+      revealTilesMaterial: null,
       applyUniforms(target, uniforms, radius, opacity, source) {
         const marker = orb.state.marker;
         if (!marker) return false;
@@ -609,6 +640,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         applyContent(target, source?.content ?? orb.state.content);
         if (source?.kind === "equirectangular") target.setTexture("panoramaEquirect", source.texture);
         else target.setTexture("panoramaCube", source?.texture ?? orb.state.texture ?? placeholder!);
+        if (source?.kind === "tiles" && source.tiles) applyTiles(target, source.tiles);
         return true;
       },
       update(state) {
@@ -622,6 +654,9 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         if (expansion?.source?.kind === "equirectangular") {
           orb.revealEquirectMaterial ??= orbMaterial(`panorama-orb-reveal-equirect-material-${id}`, ["#define SOURCE_EQUIRECT"], true);
           revealMesh.material = orb.revealEquirectMaterial;
+        } else if (expansion?.source?.kind === "tiles") {
+          orb.revealTilesMaterial ??= orbMaterial(`panorama-orb-reveal-tiles-material-${id}`, ["#define SOURCE_TILES"], true);
+          revealMesh.material = orb.revealTilesMaterial;
         } else revealMesh.material = revealMaterial;
         revealMesh.setEnabled(expansion !== null && orb.state.marker !== null && (expansion.source?.texture ?? orb.state.texture) !== null);
         options.requestRender();
@@ -643,6 +678,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         material.dispose();
         revealMaterial.dispose();
         orb.revealEquirectMaterial?.dispose();
+        orb.revealTilesMaterial?.dispose();
         options.requestRender();
       },
     };
@@ -656,7 +692,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const revealObserver: Observer<Mesh> | null = revealMesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames || !orb.expansion) return;
-      const target = orb.expansion.source?.kind === "equirectangular" ? orb.revealEquirectMaterial! : revealMaterial;
+      const kind = orb.expansion.source?.kind;
+      const target = kind === "equirectangular" ? orb.revealEquirectMaterial! : kind === "tiles" ? orb.revealTilesMaterial! : revealMaterial;
       if (orb.applyUniforms(target, frames.uniforms, orb.expansion.radiusMeters, orb.expansion.reveal, orb.expansion.source)) record(`reveal:${id}`, frames.current, frames.uniforms);
     }));
     orbs.set(id, orb);
@@ -677,7 +714,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       material = new ShaderMaterial(`panorama-immersion-${key || "cube"}`, scene, { vertexSource: webGpu ? IMMERSION_VERTEX : IMMERSION_VERTEX_GLSL, fragmentSource: webGpu ? IMMERSION_FRAGMENT : IMMERSION_FRAGMENT_GLSL }, {
         attributes: ["position"],
         uniforms: webGpu ? [...IMMERSION_UNIFORMS] : [...IMMERSION_UNIFORMS, ...IMMERSION_LEAN_UNIFORMS],
-        samplers: ["panoramaCube", "panoramaEquirect", "nextCube", "nextEquirect"],
+        samplers: ["panoramaCube", "panoramaEquirect", "nextCube", "nextEquirect", ...TILE_SAMPLERS, ...NEXT_TILE_SAMPLERS],
         defines: [...backendDefines, ...all],
         shaderLanguage,
         needAlphaBlending: !opaque && !defines.some(define => define.includes("OUTPUT_")),
@@ -694,7 +731,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   function immersionDefines(state: { source: ImmersionSource; next: ImmersionSource | null }, output?: "direction" | "ray"): string[] {
     const defines: string[] = [];
     if (state.source.kind === "equirectangular") defines.push("#define SOURCE_EQUIRECT");
+    // A tiled cube draws over its preview cube: the cube's path, and its tiles.
+    if (state.source.kind === "tiles") defines.push("#define SOURCE_TILES");
     if (state.next) defines.push(state.next.kind === "equirectangular" ? "#define NEXT_EQUIRECT" : "#define NEXT_CUBE");
+    if (state.next?.kind === "tiles") defines.push("#define NEXT_TILES");
     if (output) defines.push(output === "direction" ? "#define OUTPUT_DIRECTION" : "#define OUTPUT_RAY");
     return defines;
   }
@@ -711,7 +751,9 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       material.setMatrix("nextImageFromClip", imageFromClipMatrix(uniforms.inverseViewRotProj, (state.next ?? state.source).content, new Matrix()));
     }
     material.setTexture(state.source.kind === "equirectangular" ? "panoramaEquirect" : "panoramaCube", state.source.texture);
+    if (state.source.kind === "tiles" && state.source.tiles) applyTiles(material, state.source.tiles);
     if (state.next) material.setTexture(state.next.kind === "equirectangular" ? "nextEquirect" : "nextCube", state.next.texture);
+    if (state.next?.kind === "tiles" && state.next.tiles) applyTiles(material, state.next.tiles, true);
   }
   if (immersionMesh) {
     triangleData.applyToMesh(immersionMesh);

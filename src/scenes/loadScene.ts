@@ -17,15 +17,18 @@ import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
 import type { BabylonRuntime } from "../engine/babylon/createBabylonRuntime";
 import type { FrameProfiler } from "../perf/frameProfiler";
 import type { NavigationLease, NavigationPresentation, NavigationSnapshot } from "../engine/babylon/navigationLease";
-import { createPanoramaRenderer, effectiveOrbRadius, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer, type PanoramaRendererExperiments } from "../engine/babylon/panorama/panoramaRenderer";
+import { createPanoramaRenderer, effectiveOrbRadius, type ImmersionSource, type PanoramaOrb, type PanoramaRenderer, type PanoramaRendererExperiments, type TiledSourceTextures } from "../engine/babylon/panorama/panoramaRenderer";
 import { createPanoramaUploader, type PanoramaGpuTexture, type PanoramaUploader } from "../engine/babylon/panorama/panoramaTextures";
+import { createPanoramaTileAtlas } from "../engine/babylon/panorama/panoramaTileAtlas";
 import { getAppSettings } from "../settings/appSettings";
 import type { SettingsRegistry } from "../settings/registry";
 import { isNumberRange } from "../settings/values";
 import { RENDERER_EXPERIMENT_IDS } from "../settings/catalogue/renderer";
 import { SCENE_PARAMETERS } from "../settings/catalogue/scenes";
-import { chooseRepresentation, MIB, representationAroundPx, representationFaceTexels, representationGpuBytes, representationMaxSide } from "./budget";
-import type { AttributionRecord, ResolvedAsset, ResolvedPanorama, ResolvedRepresentation, SceneDiagnostic, ValidatedScene, ViewRecord } from "./format";
+import { chooseRepresentation, MIB, representationAroundPx, representationFaceTexels, representationGpuBytes, representationMaxSide, tileAtlasLayout, tiledCubeTileCount } from "./budget";
+import type { AttributionRecord, ResolvedAsset, ResolvedPanorama, ResolvedRepresentation, ResolvedTiledCube, SceneDiagnostic, ValidatedScene, ViewRecord } from "./format";
+import { createTiledPanorama, type TiledPanoramaLimits } from "./tiles/tiledPanorama";
+import type { TileSelectionParameters, TileView } from "./tiles/tileSelection";
 import { isSafariGestureSupported } from "../input/safariGestures";
 import { watchWheelGestures } from "../input/wheelController";
 import type { HeldPress } from "../input/mouseController";
@@ -44,6 +47,7 @@ import {
   handoffReady,
   immersionFaceTexels,
   length,
+  mulMat3,
   orbGeometry,
   previewFaceTexels,
   scale,
@@ -69,6 +73,8 @@ const UPLOAD_SECTION = "render/scenes/upload";
 const PLACEMENT_SECTION = "render/scenes/placement";
 const DECODE_COMPLETION_SECTION = "scenes/decode completion";
 const DECODE_WALL_SECTION = "background/panorama decode";
+const TILE_SECTION = "render/scenes/tiles";
+const TILE_UPLOAD_SECTION = "render/scenes/tiles/upload";
 
 // ─── Public types ──────────────────────────────────────────────────────
 
@@ -88,14 +94,18 @@ export type ScenePhase = "overview" | "preparing" | "entering" | "immersive" | "
 export interface SceneImageStatus {
   id: string;
   role: "preview" | "immersion";
-  projection: "cube" | "equirectangular";
-  /** Pixels: an equirectangular image's width and height, or a cube face's side twice. */
+  projection: "cube" | "equirectangular" | "tiled-cube";
+  /** A tiled cube's warp. */
+  warp?: "equi-angular" | "gnomonic";
+  /** A tiled cube's tile count. */
+  tiles?: number;
+  /** Pixels: an equirectangular image's width and height, or a cube face's side twice, a tiled cube's finest. */
   width: number;
   height: number;
   /** Pixels around the whole turn: an equirectangular image's width, or four cube faces. */
   aroundPx: number;
   encodedBytes: number;
-  /** GPU bytes once uploaded with its mips. */
+  /** GPU bytes once uploaded with its mips; a tiled cube's atlas, which holds part of it. */
   gpuBytes: number;
 }
 
@@ -127,6 +137,21 @@ export interface ImmersionDetailStatus {
   limitation: string | null;
   /** A larger or smaller image on its way to replace it, while it loads. */
   loading: string | null;
+  /** While a tiled cube is on screen: how much of the view its tiles cover. */
+  tiles?: {
+    /** Tiles the view needs, and how many are on screen. */
+    inView: number;
+    shownInView: number;
+    /** The finest level the view asks for, and the cube's finest. */
+    levelWanted: number;
+    finestLevel: number;
+    loading: number;
+    receivedBytes: number;
+    /** Tiles held in the atlas, and its slots. */
+    resident: number;
+    slots: number;
+    complete: boolean;
+  };
 }
 
 export interface SceneStatus {
@@ -372,7 +397,11 @@ interface Immersion {
   lease: NavigationLease;
   id: string;
   shown: { handle: SourceHandle<PanoramaGpuTexture>; entry: Entry };
-  detail: ImmersionDetailStatus;
+  /** Tiles loading behind a sharper image on screen, before they crossfade in. */
+  incoming: { handle: SourceHandle<PanoramaGpuTexture>; entry: Entry } | null;
+  /** Tiled cubes that failed in this panorama: it shows whole images instead. */
+  failedTiles: Set<string>;
+  detail: Omit<ImmersionDetailStatus, "tiles">;
   refine: AbortController | null;
   look: LookModel;
   roll: number;
@@ -402,24 +431,31 @@ interface Flying {
 
 let sessionCounter = 0;
 
-/** An asset's images, smallest first, as the panorama's tab lists them. */
-function imagesOf(asset: ResolvedAsset): SceneImageStatus[] {
+/** An asset's images, smallest first, as the panorama's tab lists them; a tiled cube's GPU bytes are its atlas's. */
+function imagesOf(asset: ResolvedAsset, tileMemoryBytes: number, maxTextureSide: number): SceneImageStatus[] {
   return asset.representations
     .map(representation => ({
       id: representation.id,
       role: representation.role,
       projection: representation.projection,
-      width: representation.projection === "cube" ? representation.faceSize : representation.width,
-      height: representation.projection === "cube" ? representation.faceSize : representation.height,
+      ...(representation.projection === "tiled-cube" ? { warp: representation.warp, tiles: tiledCubeTileCount(representation) } : {}),
+      width: representation.projection === "equirectangular" ? representation.width : representation.faceSize,
+      height: representation.projection === "equirectangular" ? representation.height : representation.faceSize,
       aroundPx: representationAroundPx(representation),
       encodedBytes: representation.encodedBytes,
-      gpuBytes: representationGpuBytes(representation),
+      gpuBytes: representationGpuBytes(representation, tileMemoryBytes, maxTextureSide),
     }))
     .sort((a, b) => a.aroundPx - b.aroundPx || a.gpuBytes - b.gpuBytes);
 }
 
+/** A tiled cube's kind, as a sentence names it. */
+function tilesName(warp: ResolvedTiledCube["warp"]): string {
+  return warp === "equi-angular" ? "equi-angular cube tiles" : "cube tiles";
+}
+
 /** How the panorama's tab names an image in a sentence. */
 function imageName(representation: ResolvedRepresentation): string {
+  if (representation.projection === "tiled-cube") return `The ${tilesName(representation.warp)}`;
   return representation.projection === "cube"
     ? `The ${representation.faceSize} px ${representation.role === "preview" ? "preview " : ""}cube`
     : `The ${representation.width} px image`;
@@ -540,6 +576,25 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   // The device's limit, when there is a device; otherwise only the parameters limit sizes.
   const deviceMaxSide = (): number => engine?.getCaps().maxTextureSize ?? settings.getDeviceContext().maxTextureSize ?? Number.POSITIVE_INFINITY;
   let uploader: PanoramaUploader | null = null;
+  // The browser decodes off the main thread: its wall time runs alongside frames, not in one.
+  async function decodeBitmap(bytes: Uint8Array): Promise<ImageBitmap> {
+    const started = profiler?.clock() ?? 0;
+    const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), { colorSpaceConversion: "none", premultiplyAlpha: "none", imageOrientation: "from-image" });
+    if (started) profiler!.add(DECODE_WALL_SECTION, started);
+    return bitmap;
+  }
+  /** How tiled cubes load: the Scenes tab's tile parameters, the fades and each request's bounds. */
+  const tileLimits = (): TiledPanoramaLimits => ({
+    requests: Math.max(1, Math.round(num("scene.panorama.tileRequests"))),
+    waiting: Math.max(1, Math.round(num("scene.panorama.tilesWaiting"))),
+    decodes: Math.max(1, Math.round(num("scene.panorama.tileDecodes"))),
+    uploadsPerFrame: Math.max(1, Math.round(num("scene.panorama.tileUploadsPerFrame"))),
+    retries: Math.max(0, Math.round(num("scene.panorama.tileRetries"))),
+    retryDelayMs: num("scene.panorama.tileRetryDelay"),
+    fadeMs: reducedMotion() ? num("scene.panorama.reducedFadeDuration") : num("scene.panorama.fadeDuration"),
+    timeoutMs: num("scene.panorama.requestTimeout") * 1000,
+    responseBytes: num("scene.panorama.responseMiB") * MIB,
+  });
   const uploadLimits = () => ({ bytesPerFrame: num("scene.panorama.uploadMiBPerFrame") * MIB, outstandingBytes: num("scene.panorama.uploadOutstandingMiB") * MIB });
   const backend: ResourceBackend<PanoramaGpuTexture> = options.internals?.backend ?? (() => {
     const gpuUploader = scene && renderer.available ? createPanoramaUploader(scene, uploadLimits(), () => runtime.requestRender()) : null;
@@ -547,16 +602,34 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const refuse = () => Promise.reject(new ResourceRefusal(renderer.unavailableReason ?? "Panoramas are unavailable on this renderer.", "device"));
     return {
       fetch: (url, init) => fetch(url, init),
-      // The browser decodes off the main thread: its wall time runs alongside frames, not in one.
-      async decode(bytes) {
-        const started = profiler?.clock() ?? 0;
-        const bitmap = await createImageBitmap(new Blob([bytes as BlobPart]), { colorSpaceConversion: "none", premultiplyAlpha: "none", imageOrientation: "from-image" });
-        if (started) profiler!.add(DECODE_WALL_SECTION, started);
-        return bitmap;
-      },
+      decode: bytes => decodeBitmap(bytes),
       // Allocating the texture and queueing its rows: what finishing a decode costs the frame.
       uploadCube: (faces, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadCube(faces, label)) : refuse()),
       uploadEquirect: (image, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadEquirect(image, label)) : refuse()),
+      async createTiles(representation, layout, label) {
+        if (!scene || !gpuUploader) return refuse();
+        const cells = representation.faceSize / representation.tileSize;
+        const atlas = createPanoramaTileAtlas(scene, layout, cells, label);
+        const textures: TiledSourceTextures = {
+          atlas: atlas.atlas, table: atlas.table, layout: [cells, representation.tileSize, representation.gutter, layout.stored],
+          atlasSize: [layout.width, layout.height], warp: representation.warp, outlines: settings.get("scene.panorama.tileOutlines") === true,
+        };
+        const panorama = createTiledPanorama<ImageBitmap>({
+          representation, layout,
+          // Copying a tile into the atlas is a frame's work, timed with the uploads.
+          atlas: { uploadTile: (slot, image) => timedCall(TILE_UPLOAD_SECTION, () => atlas.uploadTile(slot, image)), setTable: bytes => atlas.setTable(bytes), dispose: () => atlas.dispose() },
+          fetch: (url, init) => fetch(url, init),
+          decode: bytes => decodeBitmap(bytes),
+          release: image => image.close(),
+          limits: tileLimits(),
+          wake: () => runtime.requestRender(),
+        });
+        return {
+          kind: "tiles", width: representation.faceSize, height: representation.faceSize, levels: representation.levelBytes.length,
+          gpuBytes: layout.gpuBytes, texture: atlas.atlas, complete: true, tiles: { panorama, textures },
+          dispose: () => panorama.dispose(),
+        };
+      },
       maxTextureSide: deviceMaxSide,
     };
   })();
@@ -579,6 +652,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   const offFrame = onFrame(() => {
     const started = profiler?.clock() ?? 0;
     timedCall(UPLOAD_SECTION, () => uploader?.pump());
+    timedCall(TILE_SECTION, tickTiles);
     for (const callback of [...frameCallbacks]) callback();
     timedCall(PLACEMENT_SECTION, () => { refreshPlacements(); tryApplyOverview(); });
     for (const listener of [...frameListeners]) listener();
@@ -636,7 +710,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
         },
         pose: { headingDeg: record.imagePose.headingDeg, pitchDeg: record.imagePose.pitchDeg, rollDeg: record.imagePose.rollDeg, aligned: record.imagePose.aligned ?? null },
         attribution: { ...entry.asset.attribution },
-        images: imagesOf(entry.asset),
+        images: imagesOf(entry.asset, num("scene.panorama.tileMemoryMiB") * MIB, deviceMaxSide()),
         links: record.links.map(link => ({
           id: link.id, label: link.label, target: link.target,
           enabled: entries.has(link.target), placed: Boolean(link.direction),
@@ -658,7 +732,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       entries: list,
       groups: current.groups.map(group => ({ id: group.id, title: group.title, members: [...group.members] })),
       credits: [...visibleAssets].map(assetId => ({ assetId, ...current.assets.get(assetId)!.attribution })),
-      immersionDetail: immersion?.detail ?? null,
+      immersionDetail: immersion ? { ...immersion.detail, ...tileStatus(immersion) } : null,
       overview: overviewState,
       renderingAvailable: renderer.available,
       unavailableReason: renderer.unavailableReason,
@@ -1009,7 +1083,111 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }
 
   function sourceOf(entry: Entry, handle: SourceHandle<PanoramaGpuTexture>): ImmersionSource {
+    const tiles = handle.texture.tiles;
+    // A tiled cube draws over the preview cube it holds.
+    if (tiles && handle.fallback) return { texture: handle.fallback.texture.texture, kind: "tiles", content: entry.content, tiles: tiles.textures };
     return { texture: handle.texture.texture, kind: handle.texture.kind, content: entry.content };
+  }
+
+  // ─── Tiles ──────────────────────────────────────────────────────────
+  /** The view in an image's own axes, as tile selection takes it. */
+  function tileViewOf(frame: NonNullable<ReturnType<SceneRenderer["cameraFrame"]>>, content: Mat3, heightPx: number): TileView {
+    const tanHalfHeight = Math.tan(frame.view.verticalFovRad / 2);
+    return {
+      forward: mulMat3(content, frame.view.forward), right: mulMat3(content, frame.view.right), up: mulMat3(content, frame.view.up),
+      tanHalfHeight, tanHalfWidth: tanHalfHeight * frame.view.aspect, heightPx,
+    };
+  }
+
+  /** The levels a tiled cube may show: the sharpness target, and the image detail as its finest level. */
+  function tileParameters(representation: ResolvedTiledCube): TileSelectionParameters {
+    const target = settings.get("scene.panorama.immersionDensity");
+    const cap = detailCap();
+    const finest = representation.levelBytes.length - 1;
+    // Level l's faces are tileSize · 2^l texels, four of them around the turn.
+    const levelCap = Number.isFinite(cap) ? Math.max(0, Math.min(finest, Math.floor(Math.log2(cap / (4 * representation.tileSize))))) : finest;
+    return { texelsPerPixel: typeof target === "number" ? target : 1, marginDeg: num("scene.panorama.tileMarginDeg"), levelCap };
+  }
+
+  /** The tiled cubes the view feeds: the one on screen, and one loading behind a sharper image. */
+  function liveTiles(state: Immersion): { handle: SourceHandle<PanoramaGpuTexture>; entry: Entry }[] {
+    return [state.shown, state.incoming].filter((each): each is { handle: SourceHandle<PanoramaGpuTexture>; entry: Entry } => Boolean(each?.handle.texture.tiles));
+  }
+
+  let tileDigest = "";
+  /** One frame of every live tiled cube, with the view as it is drawn this frame. */
+  function tickTiles(): void {
+    const state = immersion;
+    if (!state || state.leaving) return;
+    const live = liveTiles(state);
+    if (live.length === 0) return;
+    const frame = renderer.cameraFrame(runtime.getPresentationView());
+    if (!frame) return;
+    const heightPx = engine?.getRenderHeight() ?? frame.viewportHeightCssPx * devicePixelsPerCss();
+    const at = now();
+    let busy = false;
+    for (const { handle, entry } of live) {
+      const { panorama } = handle.texture.tiles!;
+      if (panorama.tick(at, tileViewOf(frame, entry.content, heightPx), tileParameters(panorama.representation))) busy = true;
+    }
+    if (busy) runtime.requestRender();
+    const stats = state.shown.handle.texture.tiles?.panorama.stats();
+    const digest = stats ? `${stats.shownInView}/${stats.inView}/${stats.levelWanted}/${stats.loading}/${stats.resident}/${stats.complete}` : "";
+    if (digest !== tileDigest) {
+      tileDigest = digest;
+      emit();
+    }
+  }
+
+  function tileStatus(state: Immersion): Pick<ImmersionDetailStatus, "tiles"> {
+    const tiles = state.shown.handle.texture.tiles;
+    if (!tiles) return {};
+    const stats = tiles.panorama.stats();
+    return {
+      tiles: {
+        inView: stats.inView, shownInView: stats.shownInView, levelWanted: stats.levelWanted, finestLevel: tiles.panorama.tiling.maxLevel,
+        loading: stats.loading, receivedBytes: stats.receivedBytes, resident: stats.resident, slots: stats.slots, complete: stats.complete,
+      },
+    };
+  }
+
+  /** Resolves once a tiled cube covers the view, or has nothing more it can load; rejects when `signal` aborts. */
+  function tilesCoverView(handle: SourceHandle<PanoramaGpuTexture>, signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const stop = (): void => { frameCallbacks.delete(check); signal.removeEventListener("abort", onAbort); };
+      const onAbort = (): void => { stop(); reject(signal.reason); };
+      const check = (): void => {
+        const stats = handle.texture.tiles?.panorama.stats();
+        if (!stats || stats.complete || (stats.failures > 0 && stats.loading === 0 && stats.waiting === 0)) { stop(); resolve(); }
+      };
+      if (signal.aborted) { reject(signal.reason); return; }
+      signal.addEventListener("abort", onAbort, { once: true });
+      frameCallbacks.add(check);
+      runtime.requestRender();
+    });
+  }
+
+  /** Lets go of tiles that were loading behind the image on screen. */
+  function dropIncoming(state: Immersion): void {
+    state.incoming?.handle.release();
+    state.incoming = null;
+  }
+
+  /**
+   * The tiled cube `scene.panorama.representation` asks for, when the
+   * panorama offers one and tiles have not failed in it: the asked-for warp,
+   * else the other. `note` says why it is not what was asked for.
+   */
+  function preferredTiles(state: Immersion): { representation: ResolvedTiledCube | null; note: string | null } {
+    const preference = settings.get("scene.panorama.representation");
+    if (preference === "whole") return { representation: null, note: null };
+    const warp: ResolvedTiledCube["warp"] = preference === "cube-tiles" ? "gnomonic" : "equi-angular";
+    const offered = state.shown.entry.asset.representations.filter((rep): rep is ResolvedTiledCube => rep.projection === "tiled-cube" && !state.failedTiles.has(rep.id));
+    const exact = offered.find(rep => rep.warp === warp);
+    if (exact) return { representation: exact, note: null };
+    if (offered[0]) return { representation: offered[0], note: `This panorama has no ${tilesName(warp)}, so it shows its ${tilesName(offered[0].warp)} (360 image settings → Image).` };
+    // A panorama without tiles shows whole images whatever the representation: there is nothing to say.
+    return { representation: null, note: null };
   }
 
   /** Starts immersion in `entry` with `view`: look input, controller intents and lease loss handling. */
@@ -1063,7 +1241,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     };
     lease.signal.addEventListener("abort", onLeaseAbort, { once: true });
     const state: Immersion = {
-      lease, id: entry.record.id, shown: { handle, entry }, detail, refine: null, look, roll: view.rollDeg, input, offIntents,
+      lease, id: entry.record.id, shown: { handle, entry }, incoming: null, failedTiles: new Set(), detail, refine: null, look, roll: view.rollDeg, input, offIntents,
       offLeaseAbort: () => lease.signal.removeEventListener("abort", onLeaseAbort), stopLook, leaving: false, session,
     };
     self.state = state;
@@ -1235,7 +1413,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
 
   /** Why `rep` does not fit the GPU budgets now, in words. */
   function memoryRefusal(rep: ResolvedRepresentation): string {
-    const bytes = representationGpuBytes(rep);
+    const bytes = representationGpuBytes(rep, num("scene.panorama.tileMemoryMiB") * MIB, deviceMaxSide());
     const pools = resources.stats().pools;
     if (bytes > pools.overlap.limit - pools.overlap.reserved) {
       return `${imageName(rep)} needs ${mebibytes(bytes)} of GPU memory with its mips, more than the ${mebibytes(pools.overlap.limit)} replacement overlap allows (Scenes → Loading and memory).`;
@@ -1245,12 +1423,101 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
 
   /**
    * Chooses the image to show and, when it is not the one on screen, loads it
-   * in the background and crossfades to it. By default that is the largest
-   * image the panorama offers within the image detail, the device and the
-   * budgets; with a sharpness target, the smallest that meets it. Either
-   * way the status says which image is shown and why no larger one is.
+   * in the background and puts it on screen. A tiled cube, when the
+   * representation asks for one and the panorama offers it, shows over the
+   * preview at once and sharpens as its tiles arrive. Otherwise the largest
+   * whole image the panorama offers within the image detail, the device and
+   * the budgets, or with a sharpness target the smallest that meets it,
+   * crossfades in once loaded. Either way the status says which image is
+   * shown and why no larger one is.
    */
   function refine(state: Immersion): void {
+    const tiles = renderer.available ? preferredTiles(state) : { representation: null, note: null };
+    if (tiles.representation) {
+      const refusal = tilesRefusal(state, tiles.representation);
+      if (!refusal) { refineTiles(state, tiles.representation, tiles.note); return; }
+      refineWhole(state, refusal);
+      return;
+    }
+    refineWhole(state, tiles.note);
+  }
+
+  /** Why a tiled cube cannot be shown now, or null. */
+  function tilesRefusal(state: Immersion, representation: ResolvedTiledCube): string | null {
+    const shown = state.shown.handle;
+    if (shown.representation.id === representation.id && shown.texture.tiles?.panorama.layout.slots === tileAtlasLayout(representation, num("scene.panorama.tileMemoryMiB") * MIB, deviceMaxSide())?.slots) return null;
+    const layout = tileAtlasLayout(representation, num("scene.panorama.tileMemoryMiB") * MIB, deviceMaxSide());
+    if (!layout) return `Not one tile fits the tile memory, so it shows a whole image (Scenes → Tiled images).`;
+    if (resources.wouldFit(representation, true)) return null;
+    const pools = resources.stats().pools;
+    return `Its ${tilesName(representation.warp)} need ${mebibytes(layout.gpuBytes)} of GPU memory for their tiles; ${mebibytes(Math.max(0, Math.min(resources.gpuRoom(), pools.overlap.limit - pools.overlap.reserved)))} is free (Scenes → Loading and memory), so it shows a whole image.`;
+  }
+
+  function refineTiles(state: Immersion, representation: ResolvedTiledCube, note: string | null): void {
+    const entry = state.shown.entry;
+    const shown = state.shown.handle;
+    if (shown.representation.id === representation.id && shown.texture.tiles?.panorama.layout.slots === tileAtlasLayout(representation, num("scene.panorama.tileMemoryMiB") * MIB, deviceMaxSide())?.slots) {
+      state.refine?.abort();
+      state.refine = null;
+      dropIncoming(state);
+      state.detail = { representation: representation.id, limitation: note, loading: null };
+      emit();
+      return;
+    }
+    // Already on its way: let it arrive.
+    if (state.refine && !state.refine.signal.aborted && state.detail.loading === representation.id) return;
+    state.refine?.abort();
+    dropIncoming(state);
+    const controller = new AbortController();
+    state.refine = controller;
+    state.detail = { representation: shown.representation.id, limitation: null, loading: representation.id };
+    emit();
+    resources.acquire(entry.asset, representation, { signal: controller.signal, priority: 5, overlap: true, ...(entry.preview.handle ? { fallback: entry.preview.handle.representation } : {}) }).then(async handle => {
+      if (immersion !== state || controller.signal.aborted || state.shown.entry !== entry) { handle.release(); return; }
+      // A cached atlas comes back with the settings of its last use.
+      if (handle.texture.tiles) {
+        handle.texture.tiles.panorama.setLimits(tileLimits());
+        handle.texture.tiles.textures.outlines = settings.get("scene.panorama.tileOutlines") === true;
+      }
+      const previous = state.shown.handle;
+      // Over the preview the tiles show at once: where none has arrived, they draw the same preview.
+      if (previous.representation.role !== "preview") {
+        // Over a sharper image, the view's tiles load behind it first, then crossfade in.
+        state.incoming = { handle, entry };
+        const fade = reducedMotion() ? num("scene.panorama.reducedFadeDuration") : num("scene.panorama.fadeDuration");
+        try {
+          await tilesCoverView(handle, controller.signal);
+          await animate(fade, t => {
+            if (immersion === state) renderer.immersion.show({ source: sourceOf(entry, previous), next: sourceOf(entry, handle), mix: smooth(t) });
+          }, controller.signal, state.lease);
+        } catch {
+          if (state.incoming?.handle === handle) state.incoming = null;
+          handle.release();
+          return;
+        }
+        if (state.incoming?.handle === handle) state.incoming = null;
+      }
+      if (immersion !== state) { handle.release(); return; }
+      renderer.immersion.show({ source: sourceOf(entry, handle) });
+      state.shown = { handle, entry };
+      state.detail = { representation: representation.id, limitation: note, loading: null };
+      if (state.refine === controller) state.refine = null;
+      // The preview stays cached for the orb; only the reference is dropped.
+      if (previous !== entry.preview.handle) previous.release();
+      runtime.requestRender();
+      emit();
+    }, error => {
+      if (immersion !== state || controller.signal.aborted) return;
+      if (state.refine === controller) state.refine = null;
+      const cause = error instanceof Error ? error.message : String(error);
+      state.failedTiles.add(representation.id);
+      report("image", entry, cause, `${entry.record.title}: its ${tilesName(representation.warp)} could not be shown, so it shows a whole image: ${sentence(cause)}`);
+      refine(state);
+    });
+  }
+
+  /** The whole images' choice; `note` says why no tiled cube is shown, when one was asked for. */
+  function refineWhole(state: Immersion, note: string | null): void {
     const entry = state.shown.entry;
     const shownId = state.shown.handle.representation.id;
     const previewId = entry.preview.handle?.representation.id ?? null;
@@ -1262,8 +1529,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       ? immersionFaceTexels(frame.viewportHeightCssPx * devicePixelsPerCss(), state.look.get().verticalFovDeg * DEG_TO_RAD, target)
       : Number.POSITIVE_INFINITY;
     const deviceSide = deviceMaxSide();
-    // The orb's preview is on the GPU already and can always be shown; the image on screen, within the detail.
-    const candidates = entry.asset.representations.filter(rep => rep.role === "immersion" || rep.id === shownId || rep.id === previewId);
+    // The orb's preview is on the GPU already and can always be shown; the image on screen, within the detail. Tiles are not whole images.
+    const candidates = entry.asset.representations.filter(rep => rep.projection !== "tiled-cube" && (rep.role === "immersion" || rep.id === shownId || rep.id === previewId));
     const choice = chooseRepresentation(candidates, "any", wanted, rep => {
       if (rep.id === previewId) return null;
       if (representationAroundPx(rep) > cap) return `${imageName(rep)} is more than the ${Math.round(cap)} px image detail allows.`;
@@ -1273,15 +1540,16 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     });
     if (!choice) return;
     const chosen = choice.representation;
-    const largest = Math.max(...entry.asset.representations.map(representationAroundPx));
-    const limitation = choice.next?.reason
+    const largest = Math.max(...candidates.map(representationAroundPx));
+    const limitation = [note, choice.next?.reason
       ?? (representationAroundPx(chosen) < largest && typeof target === "number"
         ? `The sharpness target is met: ${Math.round(wanted)} texels per cube face, ${target} per rendered pixel (360 image settings → Image).`
-        : null);
+        : null)].filter(Boolean).join(" ") || null;
     // Already on its way: let it arrive.
     if (state.refine && !state.refine.signal.aborted && state.detail.loading === chosen.id) return;
     state.refine?.abort();
     state.refine = null;
+    dropIncoming(state);
     if (chosen.id === shownId) {
       state.detail = { representation: shownId, limitation, loading: null };
       emit();
@@ -1339,6 +1607,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     if (!state) return null;
     immersion = null;
     silence(state);
+    dropIncoming(state);
     state.offLeaseAbort();
     renderer.immersion.show(null);
     const own = state.shown.handle !== state.shown.entry.preview.handle ? state.shown.handle : null;
@@ -1542,6 +1811,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       }, signal, state.lease);
       if (immersion !== state) throw new DOMException("Immersion ended.", "AbortError");
       state.refine?.abort();
+      dropIncoming(state);
+      state.failedTiles.clear();
       if (from.handle !== from.entry.preview.handle) from.handle.release();
       state.shown = { handle, entry };
       state.id = entry.record.id;
@@ -1743,11 +2014,30 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }));
 
   // ─── Settings ───────────────────────────────────────────────────────
-  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth"].map(id => `scene.panorama.${id}`);
+  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth", "tileMemoryMiB"].map(id => `scene.panorama.${id}`);
   for (const id of loadingIds) cleanups.push(settings.watch(id, () => resources.setSettings(resourceSettingsFrom(each => settings.get(each), detailCap()))));
   // The image detail, the sharpness target and the GPU budgets choose the image on screen again at once.
-  for (const id of ["scene.panorama.immersionWidth", "scene.panorama.immersionDensity", "scene.panorama.sourceGpuMiB", "scene.panorama.overlapMiB"]) {
-    cleanups.push(settings.watch(id, () => { if (immersion && phase === "immersive") refine(immersion); }));
+  for (const id of ["scene.panorama.immersionWidth", "scene.panorama.immersionDensity", "scene.panorama.sourceGpuMiB", "scene.panorama.overlapMiB", "scene.panorama.representation", "scene.panorama.tileMemoryMiB"]) {
+    cleanups.push(settings.watch(id, () => {
+      if (!immersion) return;
+      // Asked for again: a tiled cube that failed may load now.
+      if (id === "scene.panorama.representation") immersion.failedTiles.clear();
+      if (phase === "immersive") refine(immersion);
+      runtime.requestRender();
+    }));
+  }
+  const tileLimitIds = ["tileRequests", "tilesWaiting", "tileDecodes", "tileUploadsPerFrame", "tileRetries", "tileRetryDelay", "fadeDuration", "reducedFadeDuration", "reducedMotion", "requestTimeout", "responseMiB"].map(id => `scene.panorama.${id}`);
+  for (const id of tileLimitIds) {
+    cleanups.push(settings.watch(id, () => {
+      if (immersion) for (const { handle } of liveTiles(immersion)) handle.texture.tiles!.panorama.setLimits(tileLimits());
+    }));
+  }
+  for (const id of ["scene.panorama.tileMarginDeg", "scene.panorama.tileOutlines"]) {
+    cleanups.push(settings.watch(id, () => {
+      if (!immersion) return;
+      for (const { handle } of liveTiles(immersion)) handle.texture.tiles!.textures.outlines = settings.get("scene.panorama.tileOutlines") === true;
+      runtime.requestRender();
+    }));
   }
   for (const id of ["scene.panorama.uploadMiBPerFrame", "scene.panorama.uploadOutstandingMiB"]) cleanups.push(settings.watch(id, () => uploader?.setLimits(uploadLimits())));
   for (const id of ["scene.panorama.previewFov", "scene.panorama.markerDiameter", "scene.panorama.hitTargetDiameter"]) cleanups.push(settings.watch(id, applyAppearance));
@@ -1760,8 +2050,12 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }));
   const readings: [string, () => string | null][] = [
     ["scene.panorama.immersionWidth", () => {
-      const shown = immersion?.shown.handle.representation;
-      return shown ? `${representationAroundPx(shown)} px on screen` : null;
+      const shown = immersion?.shown.handle;
+      if (!shown) return null;
+      const tiles = shown.texture.tiles?.panorama;
+      // Tiles show the level the view needs, which may be below their finest.
+      if (tiles) return `${4 * tiles.representation.tileSize * 2 ** tiles.stats().levelWanted} px around in the view, from tiles at level ${tiles.stats().levelWanted}`;
+      return `${representationAroundPx(shown.representation)} px on screen`;
     }],
     ["scene.panorama.sourceGpuMiB", () => { const p = resources.stats().pools.sourceGpu; return `${mebibytes(p.reserved)} reserved, ${mebibytes(p.peak)} at most so far`; }],
     ["scene.panorama.overlapMiB", () => `${mebibytes(resources.stats().pools.overlap.reserved)} of replacement coexisting`],
@@ -1772,6 +2066,14 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     ["scene.panorama.decodes", () => { const s = resources.stats(); return `${s.activeDecodes} active, ${s.queuedDecodes} queued`; }],
     ["scene.panorama.uploadMiBPerFrame", () => (uploader ? `${mebibytes(uploader.stats().lastFrameBytes)} in the last frame` : null)],
     ["scene.panorama.uploadOutstandingMiB", () => (uploader ? `${mebibytes(uploader.stats().outstandingBytes)} submitted, not yet done` : null)],
+    ["scene.panorama.tileMemoryMiB", () => {
+      const stats = immersion?.shown.handle.texture.tiles?.panorama.stats();
+      return stats ? `${stats.resident} of ${stats.slots} tiles held` : null;
+    }],
+    ["scene.panorama.tileRequests", () => {
+      const stats = immersion?.shown.handle.texture.tiles?.panorama.stats();
+      return stats ? `${stats.loading} loading, ${stats.requests} asked for in this panorama` : null;
+    }],
   ];
   for (const [id, read] of readings) cleanups.push(settings.setReadingSource(id, read));
 

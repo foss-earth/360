@@ -91,11 +91,25 @@ function poseText(entry: SceneEntryStatus): string {
   return `Pose: heading ${headingDeg.toFixed(1)}°, pitch ${pitchDeg.toFixed(1)}°, roll ${rollDeg.toFixed(1)}°. ${north}`;
 }
 
-/** "the 6144 × 3072 px image", "the 256 px preview cube". */
+/** "equi-angular cube tiles", "cube tiles". */
+function tilesText(image: SceneImageStatus): string {
+  return image.warp === "equi-angular" ? "equi-angular cube tiles" : "cube tiles";
+}
+
+/** "the 6144 × 3072 px image", "the 256 px preview cube", "equi-angular cube tiles of 1536 px faces". */
 function imageText(image: SceneImageStatus): string {
+  if (image.projection === "tiled-cube") return `${tilesText(image)} of ${image.width} px faces, ${image.aroundPx} px around`;
   return image.projection === "cube"
     ? `the ${image.width} px ${image.role === "preview" ? "preview " : ""}cube, ${image.aroundPx} px around`
     : `the ${image.width} × ${image.height} px image`;
+}
+
+const kibibytes = (bytes: number): string => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`);
+
+/** How far a tiled cube on screen has got with the view: "38 of 40 tiles in view, level 3 of 3; 412 KiB downloaded." */
+function tilesProgress(tiles: NonNullable<NonNullable<SceneStatus["immersionDetail"]>["tiles"]>): string {
+  const state = tiles.complete ? "every tile the view needs is on screen" : `${tiles.shownInView} of ${tiles.inView} tiles in view on screen${tiles.loading ? `, ${tiles.loading} loading` : ""}`;
+  return `${state.charAt(0).toUpperCase()}${state.slice(1)}, at level ${tiles.levelWanted} of ${tiles.finestLevel}; ${tiles.resident} of ${tiles.slots} tiles held, ${kibibytes(tiles.receivedBytes)} downloaded.`;
 }
 
 function offeredText(images: readonly SceneImageStatus[]): string {
@@ -107,6 +121,7 @@ function offeredText(images: readonly SceneImageStatus[]): string {
   if (flat.length) parts.push(`${flat.length === 1 ? "an image" : "images"} ${listed(flat)} px wide`);
   const cubes = whole.filter(image => image.projection === "cube").map(image => image.width);
   if (cubes.length) parts.push(`cubes of ${listed(cubes)} px faces`);
+  for (const tiled of whole.filter(image => image.projection === "tiled-cube")) parts.push(`${tilesText(tiled)}, ${tiled.tiles ?? 0} of them up to ${tiled.width} px faces`);
   return `This panorama offers ${listed(parts)}.`;
 }
 
@@ -176,6 +191,7 @@ export function createPanoramaTabs(options: PanoramaTabsOptions): PanoramaTabs {
       detail.append(note("Entering: the preview shows first, then the largest image the detail allows."));
     } else {
       detail.append(note(`Showing ${imageText(shown)}.`));
+      if (status.immersionDetail.tiles) detail.append(note(tilesProgress(status.immersionDetail.tiles)));
       const loading = status.immersionDetail.loading ? entry.images.find(image => image.id === status.immersionDetail!.loading) ?? null : null;
       if (loading) detail.append(note(`Loading ${imageText(loading)}…`));
       else detail.append(note(status.immersionDetail.limitation ?? "It is the largest image this panorama offers."));
@@ -183,7 +199,7 @@ export function createPanoramaTabs(options: PanoramaTabsOptions): PanoramaTabs {
     detail.append(note(offeredText(entry.images)));
     if (options.openSettings) {
       const more = el("div", "foss-earth-choices");
-      more.append(note("Sharpness, looking and levelling:"), button("360 image settings", options.openSettings, "Opens the 360 image settings tab."));
+      more.append(note("Representation, sharpness, looking and levelling:"), button("360 image settings", options.openSettings, "Opens the 360 image settings tab."));
       detail.append(more);
     }
   }
