@@ -25,6 +25,18 @@ export interface SceneFileReport {
 /** `read` returns a file's bytes, or null when it does not exist. */
 export function checkSceneFiles(scene: ValidatedScene, read: (url: string) => Uint8Array | null): SceneFileReport {
   const report: SceneFileReport = { problems: [], files: 0, bytes: 0, largestFile: null };
+  // A sheet is one file of the declared type, size and bytes; whether it shows its cubes' faces takes a decoder (scripts/check-scene.mjs).
+  for (const sheet of scene.sheets.values()) {
+    const path = `$.sheets[${sheet.id}]`;
+    const bytes = read(sheet.url);
+    if (!bytes) { report.problems.push({ path: `${path}.url`, message: `${sheet.url} does not exist` }); continue; }
+    report.files += 1;
+    report.bytes += bytes.length;
+    if (!report.largestFile || bytes.length > report.largestFile.bytes) report.largestFile = { url: sheet.url, bytes: bytes.length };
+    const problem = checkImage(bytes, { mimeType: sheet.mimeType, width: sheet.width, height: sheet.height }, null);
+    if (problem) report.problems.push({ path: `${path}.url`, message: `${sheet.url} ${problem}` });
+    if (bytes.length !== sheet.encodedBytes) report.problems.push({ path: `${path}.encodedBytes`, message: `declares ${sheet.encodedBytes} bytes; the file holds ${bytes.length}` });
+  }
   for (const asset of scene.assets.values()) {
     for (const representation of asset.representations) {
       const base = `$.assets[${asset.id}].representations[${representation.id}]`;

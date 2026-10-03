@@ -4,7 +4,9 @@
  * loader would (validateScene), then checks every media file it names against
  * what it declares (checkSceneFiles): the file exists, its header gives the
  * declared type and pixel size, and a representation's files add up to its
- * encodedBytes. Nothing is fetched from the network.
+ * encodedBytes. A preview sheet is decoded and each face in it held against
+ * the cube's own face file: it has to be the same picture. Nothing is fetched
+ * from the network.
  *
  *   node scripts/check-scene.mjs tour/scene.json --base-url https://example.org/tour/scene.json
  *
@@ -23,6 +25,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runnerImport } from "vite";
+import { verifyPreviewSheets } from "./lib/previewSheet.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -68,11 +71,19 @@ async function main() {
     const { scene } = result;
     report.warnings = scene.warnings;
     const outside = new Set();
-    const files = checkSceneFiles(scene, url => {
+    const read = url => {
       if (!url.startsWith(folderUrl.href)) { outside.add(url); return null; }
       const file = path.join(folder, decodeURIComponent(new URL(url).pathname.slice(folderUrl.pathname.length)));
       return existsSync(file) ? new Uint8Array(readFileSync(file)) : null;
-    });
+    };
+    const files = checkSceneFiles(scene, read);
+    // The sheets' pictures, against the face files, by the validated scene's resolved URLs.
+    const sheets = verifyPreviewSheets({
+      sheets: [...scene.sheets.values()],
+      assets: [...scene.assets.values()].map(asset => ({ id: asset.id, representations: asset.representations.filter(rep => rep.projection === "cube" && rep.sheet).map(rep => ({ id: rep.id, faceSize: rep.faceSize, faces: rep.faces, sheet: { id: rep.sheet.id, x: rep.sheet.x, y: rep.sheet.y } })) })),
+    }, url => { const bytes = read(url); return bytes ? Buffer.from(bytes) : null; });
+    // A sheet that does not exist is already reported by the file check.
+    files.problems.push(...sheets.problems.filter(problem => !/ does not exist$/.test(problem.message)));
     // An outside URL reads as missing; say why instead.
     report.problems = files.problems.map(problem => {
       const url = [...outside].find(candidate => problem.message === `${candidate} does not exist`);
@@ -83,6 +94,8 @@ async function main() {
       id: scene.id, revision: scene.revision, title: scene.title, manifestBytes: scene.manifestBytes,
       panoramas: scene.panoramas.size, unsupported: scene.unsupported.size, assets: scene.assets.size, groups: scene.groups.length, links,
       files: files.files, mediaBytes: files.bytes, largestFile: files.largestFile,
+      sheets: scene.sheets.size, sheetCubes: [...scene.assets.values()].reduce((sum, asset) => sum + asset.representations.filter(rep => rep.projection === "cube" && rep.sheet).length, 0),
+      sheetLowestPsnrDb: Number.isFinite(sheets.lowestPsnrDb) ? Math.round(sheets.lowestPsnrDb * 10) / 10 : null,
     };
     report.ok = report.problems.length === 0;
   }
@@ -97,6 +110,7 @@ async function main() {
     console.log(`${report.ok ? "OK" : "FAILED"}: ${s.title} (${s.id}, revision ${s.revision})`);
     console.log(`  ${s.panoramas} panoramas, ${s.assets} images, ${s.groups} groups, ${s.links} links; manifest ${s.manifestBytes} bytes`);
     console.log(`  ${s.files} media files, ${mib(s.mediaBytes)}${s.largestFile ? `; largest ${mib(s.largestFile.bytes)}, ${s.largestFile.url}` : ""}`);
+    if (s.sheets) console.log(`  ${s.sheets} preview ${s.sheets === 1 ? "sheet" : "sheets"} holding ${s.sheetCubes} cubes; its faces are within ${s.sheetLowestPsnrDb} dB of their files`);
   } else {
     console.log("FAILED: the manifest is not a valid scene");
   }

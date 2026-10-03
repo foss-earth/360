@@ -610,6 +610,8 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       decode: bytes => decodeBitmap(bytes),
       // Allocating the texture and queueing its rows: what finishing a decode costs the frame.
       uploadCube: (faces, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadCube(faces, label)) : refuse()),
+      // A face out of a preview sheet: the same pixels, no resampling and no second decode.
+      crop: (image, x, y, width, height) => createImageBitmap(image, x, y, width, height, { colorSpaceConversion: "none", premultiplyAlpha: "none" }),
       uploadEquirect: (image, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadEquirect(image, label)) : refuse()),
       async createTiles(representation, layout, label, saved) {
         if (!scene || !gpuUploader) return refuse();
@@ -2148,7 +2150,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }));
 
   // ─── Settings ───────────────────────────────────────────────────────
-  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth", "tileMemoryMiB"].map(id => `scene.panorama.${id}`);
+  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth", "tileMemoryMiB", "previewSheets"].map(id => `scene.panorama.${id}`);
   for (const id of loadingIds) cleanups.push(settings.watch(id, () => resources.setSettings(resourceSettingsFrom(each => settings.get(each), detailCap()))));
   // The image detail, the sharpness target and the GPU budgets choose the image on screen again at once.
   for (const id of ["scene.panorama.immersionWidth", "scene.panorama.immersionDensity", "scene.panorama.sourceGpuMiB", "scene.panorama.overlapMiB", "scene.panorama.representation", "scene.panorama.tileMemoryMiB"]) {
