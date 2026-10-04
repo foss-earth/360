@@ -590,6 +590,30 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     if (started) profiler!.add(DECODE_WALL_SECTION, started);
     return bitmap;
   }
+  // A rectangle of a decoded image as a bitmap that owns its pixels, unscaled. Through a canvas, and not
+  // createImageBitmap's own rectangle: Firefox's WebGL uploads the whole image behind a bitmap cut that way,
+  // which a face's texture refuses, so every orb from a preview sheet stayed black there.
+  let cropCanvas: OffscreenCanvas | null = null;
+  async function cropBitmap(image: ImageBitmap, x: number, y: number, width: number, height: number): Promise<ImageBitmap> {
+    const offscreen = typeof OffscreenCanvas === "function";
+    // An offscreen canvas hands its picture over at once, so one serves every face; an element's is copied later, so each face has its own.
+    const canvas = offscreen ? (cropCanvas ??= new OffscreenCanvas(width, height)) : document.createElement("canvas");
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    const context = canvas.getContext("2d", { alpha: false }) as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
+    if (!context) throw new Error("The browser gave no canvas to cut a preview sheet with.");
+    context.globalCompositeOperation = "copy";
+    context.imageSmoothingEnabled = false;
+    context.drawImage(image, x, y, width, height, 0, 0, width, height);
+    if (canvas instanceof HTMLCanvasElement) {
+      try {
+        return await createImageBitmap(canvas, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+      } finally {
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    }
+    return canvas.transferToImageBitmap();
+  }
   /** How tiled cubes load: the Scenes tab's tile parameters, the fades and each request's bounds. */
   const tileLimits = (): TiledPanoramaLimits => ({
     requests: Math.max(1, Math.round(num("scene.panorama.tileRequests"))),
@@ -613,7 +637,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
       // Allocating the texture and queueing its rows: what finishing a decode costs the frame.
       uploadCube: (faces, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadCube(faces, label)) : refuse()),
       // A face out of a preview sheet: the same pixels, no resampling and no second decode.
-      crop: (image, x, y, width, height) => createImageBitmap(image, x, y, width, height, { colorSpaceConversion: "none", premultiplyAlpha: "none" }),
+      crop: cropBitmap,
       uploadEquirect: (image, label) => (gpuUploader ? timedCall(DECODE_COMPLETION_SECTION, () => gpuUploader.uploadEquirect(image, label)) : refuse()),
       async createTiles(representation, layout, label, saved) {
         if (!scene || !gpuUploader) return refuse();
