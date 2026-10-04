@@ -386,6 +386,8 @@ interface Preview {
   controller: AbortController | null;
   /** A sharper preview that failed to load: not asked for again, frame after frame, while the orb stays as large. */
   failedSharper?: string | null;
+  /** Since when, `now()`, the orb has been drawn needing a smaller preview than it shows, or not drawn at all. */
+  unneededSince?: number | null;
 }
 
 interface Entry {
@@ -844,9 +846,10 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   /**
    * Every orb starts with its smallest allowed preview. One drawn with more
    * pixels than that preview has texels loads the preview its size asks for,
-   * the largest on screen first; an orb that stays small, or out of view, is
-   * left with what it has. Nothing is loaded for a size the orb could reach
-   * and has not.
+   * the largest on screen first; nothing is loaded for a size the orb could
+   * reach and has not. One that has needed less than it shows for the
+   * preview hold, drawn smaller or out of view, goes back to the preview it
+   * needs, so the GPU holds what the map shows.
    */
   function sharpenPreviews(): void {
     if (immersion || !renderer.available || entries.size === 0) return;
@@ -855,14 +858,59 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     const halfAngle = previewHalfAngle();
     const density = num("scene.panorama.previewDensity");
     const largest = range("scene.panorama.markerDiameter").max * devicePixelsPerCss();
+    const smallest = range("scene.panorama.previewFaceRange").min;
+    const hold = settings.get("scene.panorama.previewHold");
+    // Not while a panorama is being entered or left: its orb's preview is what the flight shows.
+    const holdMs = typeof hold === "number" && phase === "overview" && target === null ? hold * 1000 : null;
+    const at = now();
     for (const entry of entries.values()) {
       const { preview } = entry;
       if (preview.state !== "ready" || preview.controller || !preview.handle) continue;
       const diameter = drawnDiameterPx(entry, frame);
-      if (diameter === null || previewFaceTexels(diameter, halfAngle, density) <= representationFaceTexels(preview.handle.representation)) continue;
-      // Behind every orb's first preview (1) and an entered image; among themselves, the largest orb first.
-      loadPreview(entry, Math.min(0.99, diameter / Math.max(1, largest)), true, diameter);
+      const shown = representationFaceTexels(preview.handle.representation);
+      if (diameter !== null && previewFaceTexels(diameter, halfAngle, density) > shown) {
+        preview.unneededSince = null;
+        // Behind every orb's first preview (1) and an entered image; among themselves, the largest orb first.
+        loadPreview(entry, Math.min(0.99, diameter / Math.max(1, largest)), true, diameter);
+        continue;
+      }
+      // Most orbs show their smallest preview: nothing smaller to go back to.
+      const needed = holdMs !== null && shown > smallest ? choosePreview(entry, diameter) : null;
+      if (!needed || representationFaceTexels(needed.representation) >= shown) {
+        preview.unneededSince = null;
+        continue;
+      }
+      preview.unneededSince ??= at;
+      if (at - preview.unneededSince >= holdMs!) relaxPreview(entry, needed);
     }
+  }
+
+  /**
+   * Shows the smaller preview an orb needs now in place of the sharper one,
+   * which is given up: it stays on the GPU only within what may be kept
+   * (scene.panorama.keptGpuMiB), and its files in the saved images.
+   */
+  function relaxPreview(entry: Entry, choice: { representation: ResolvedRepresentation; limitation: string | null }): void {
+    const previous = entry.preview.handle;
+    if (!previous) return;
+    const controller = new AbortController();
+    const loadingGeneration = generation;
+    entry.preview = { ...entry.preview, controller, unneededSince: null };
+    resources.acquire(entry.asset, choice.representation, { signal: controller.signal, priority: 0 }).then(handle => {
+      if (disposed || loadingGeneration !== generation || entries.get(entry.record.id) !== entry || controller.signal.aborted) {
+        handle.release();
+        return;
+      }
+      entry.preview = { state: "ready", handle, limitation: choice.limitation, message: null, controller: null, failedSharper: entry.preview.failedSharper ?? null };
+      entry.orb.update({ texture: handle.texture.texture });
+      if (immersion?.shown.handle !== previous) previous.release();
+      runtime.requestRender();
+      emit();
+    }, () => {
+      if (disposed || loadingGeneration !== generation || entries.get(entry.record.id) !== entry || controller.signal.aborted) return;
+      // It keeps the sharper one, and tries again after another hold.
+      entry.preview = { ...entry.preview, controller: null, unneededSince: now() };
+    });
   }
 
   /**
@@ -1212,7 +1260,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     });
   }
 
-  /** Ends the warming, or only `entry`'s when another entry may have begun one since: the atlas stays in the cache, with what arrived, for whoever asks next. */
+  /** Ends the warming, or only `entry`'s when another entry may have begun one since: the atlas stays in the cache, with what arrived, for whoever asks next, within what may be kept. */
   function stopWarming(entry?: Entry): void {
     const state = warming;
     if (!state || (entry && state.entry !== entry)) return;
@@ -2150,7 +2198,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
   }));
 
   // ─── Settings ───────────────────────────────────────────────────────
-  const loadingIds = ["sourceGpuMiB", "overlapMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth", "tileMemoryMiB", "previewSheets"].map(id => `scene.panorama.${id}`);
+  const loadingIds = ["sourceGpuMiB", "overlapMiB", "keptGpuMiB", "decodedMiB", "encodedMiB", "responseMiB", "requests", "decodes", "requestTimeout", "immersionWidth", "tileMemoryMiB", "previewSheets"].map(id => `scene.panorama.${id}`);
   for (const id of loadingIds) cleanups.push(settings.watch(id, () => resources.setSettings(resourceSettingsFrom(each => settings.get(each), detailCap()))));
   // The image detail, the sharpness target and the GPU budgets choose the image on screen again at once.
   for (const id of ["scene.panorama.immersionWidth", "scene.panorama.immersionDensity", "scene.panorama.sourceGpuMiB", "scene.panorama.overlapMiB", "scene.panorama.representation", "scene.panorama.tileMemoryMiB"]) {
@@ -2195,6 +2243,7 @@ function createSceneHandle(runtime: SceneRuntime, initialScene: ValidatedScene, 
     }],
     ["scene.panorama.sourceGpuMiB", () => { const p = resources.stats().pools.sourceGpu; return `${mebibytes(p.reserved)} reserved, ${mebibytes(p.peak)} at most so far`; }],
     ["scene.panorama.overlapMiB", () => `${mebibytes(resources.stats().pools.overlap.reserved)} of replacement coexisting`],
+    ["scene.panorama.keptGpuMiB", () => { const s = resources.stats(); return `${mebibytes(s.keptBytes)} kept for ${s.keptSources} ${s.keptSources === 1 ? "image" : "images"} not on screen`; }],
     ["scene.panorama.decodedMiB", () => `${mebibytes(resources.stats().pools.decoded.reserved)} decoded and waiting to upload`],
     ["scene.panorama.encodedMiB", () => `${mebibytes(resources.stats().pools.encoded.reserved)} downloaded or arriving`],
     ["scene.panorama.responseMiB", () => { const s = resources.stats(); return `largest so far ${mebibytes(s.largestResponseBytes)}${s.rejectedResponses ? `, ${s.rejectedResponses} refused` : ""}`; }],

@@ -1059,6 +1059,58 @@ describe("orb previews", () => {
     expect(h.fetched.length).toBe(requests);
   });
 
+  it("goes back to the preview its size needs once the hold has passed, and gives the sharper one up", async () => {
+    const h = harness();
+    h.settings.set("scene.panorama.previewHold", 2);
+    h.settings.set("scene.panorama.keptGpuMiB", 0);
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    h.drawn.radiusMeters = 25;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+    const sharp = h.orbs.get(entry.id)!.state.texture;
+    // Drawn small again: it keeps the sharper preview for the hold.
+    h.drawn.radiusMeters = 2;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+    h.tick(2000);
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-64");
+    expect(h.orbs.get(entry.id)!.state.texture).not.toBe(sharp);
+    // Nothing on screen shows the sharper one, and nothing may be kept: it is off the GPU.
+    expect(h.textures.find(texture => (texture as unknown as { texture: unknown }).texture === sharp)?.disposed).toBe(true);
+    // Larger again, it loads the sharper one again, which came from the network here; it would come from the saved images.
+    h.drawn.radiusMeters = 25;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-256");
+  });
+
+  it("goes back to its smallest preview once out of view for the hold, unless it is to keep what it has while the scene is open", async () => {
+    const h = harness();
+    h.settings.set("scene.panorama.previewHold", 1);
+    const handle = await loaded(h, false, cardinal);
+    handles.push(handle);
+    const [entry] = handle.status.entries;
+    h.drawn.radiusMeters = 10;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-128");
+    h.drawn.onScreen = false;
+    await settle(h, 2);
+    expect(previewOf(handle, entry.id)).toBe("preview-128");
+    h.tick(1000);
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-64");
+    h.settings.set("scene.panorama.previewHold", "scene");
+    h.drawn.onScreen = true;
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-128");
+    h.drawn.onScreen = false;
+    h.tick(60_000);
+    await settle(h, 20);
+    expect(previewOf(handle, entry.id)).toBe("preview-128");
+  });
+
   it("leaves an orb that is off the screen with the preview it has, however large it would be drawn", async () => {
     const h = harness();
     h.drawn.onScreen = false;
