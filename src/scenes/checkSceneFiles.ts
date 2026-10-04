@@ -8,7 +8,7 @@
  * Reading is the caller's: a file system for a scene on disk, or anything else
  * that turns a resolved URL into bytes, so the check makes no requests.
  */
-import type { ResolvedTiledCube, SceneDiagnostic, ValidatedScene } from "./format";
+import { PREVIEW_SHEETS_EXTENSION, type ResolvedTiledCube, type SceneDiagnostic, type ValidatedScene } from "./format";
 import { checkImage } from "./imageHeaders";
 import { createCubeTiling } from "./tiles/cubeTiling";
 
@@ -27,7 +27,7 @@ export function checkSceneFiles(scene: ValidatedScene, read: (url: string) => Ui
   const report: SceneFileReport = { problems: [], files: 0, bytes: 0, largestFile: null };
   // A sheet is one file of the declared type, size and bytes; whether it shows its cubes' faces takes a decoder (scripts/check-scene.mjs).
   for (const sheet of scene.sheets.values()) {
-    const path = `$.sheets[${sheet.id}]`;
+    const path = `$.extensions.${PREVIEW_SHEETS_EXTENSION}.sheets[${sheet.id}]`;
     const bytes = read(sheet.url);
     if (!bytes) { report.problems.push({ path: `${path}.url`, message: `${sheet.url} does not exist` }); continue; }
     report.files += 1;

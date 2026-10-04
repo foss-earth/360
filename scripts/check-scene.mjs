@@ -25,7 +25,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runnerImport } from "vite";
-import { verifyPreviewSheets } from "./lib/previewSheet.mjs";
+import { PREVIEW_SHEETS_EXTENSION, verifyPreviewSheets } from "./lib/previewSheet.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -79,11 +79,13 @@ async function main() {
     const files = checkSceneFiles(scene, read);
     // The sheets' pictures, against the face files, by the validated scene's resolved URLs.
     const sheets = verifyPreviewSheets({
-      sheets: [...scene.sheets.values()],
-      assets: [...scene.assets.values()].map(asset => ({ id: asset.id, representations: asset.representations.filter(rep => rep.projection === "cube" && rep.sheet).map(rep => ({ id: rep.id, faceSize: rep.faceSize, faces: rep.faces, sheet: { id: rep.sheet.id, x: rep.sheet.x, y: rep.sheet.y } })) })),
+      extensions: { [PREVIEW_SHEETS_EXTENSION]: { sheets: [...scene.sheets.values()] } },
+      assets: [...scene.assets.values()].map(asset => ({ id: asset.id, representations: asset.representations.filter(rep => rep.projection === "cube" && rep.sheet).map(rep => ({ id: rep.id, faceSize: rep.faceSize, faces: rep.faces, extensions: { [PREVIEW_SHEETS_EXTENSION]: { id: rep.sheet.id, x: rep.sheet.x, y: rep.sheet.y } } })) })),
     }, url => { const bytes = read(url); return bytes ? Buffer.from(bytes) : null; });
     // A sheet that does not exist is already reported by the file check.
     files.problems.push(...sheets.problems.filter(problem => !/ does not exist$/.test(problem.message)));
+    // A sheet or a place the loader leaves unused, with a warning, is a mistake to put right before publishing.
+    files.problems.push(...scene.warnings.filter(warning => warning.path.includes(`extensions.${PREVIEW_SHEETS_EXTENSION}`)));
     // An outside URL reads as missing; say why instead.
     report.problems = files.problems.map(problem => {
       const url = [...outside].find(candidate => problem.message === `${candidate} does not exist`);
