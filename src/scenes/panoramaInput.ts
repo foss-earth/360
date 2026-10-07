@@ -12,6 +12,7 @@
  * The model is pure; `attachLookInput` binds it to the canvas and window
  * while the scene holds navigation, and nothing else.
  */
+import { controlTakesKey } from "@felipegalind0/gamepad-tools/browser";
 import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
 import type { InputModePreference } from "../input/inputSettings";
 import { createWheelGestureClassifier } from "../input/wheelController";
@@ -168,13 +169,6 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
   };
 }
 
-function isTextField(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  if (target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return true;
-  return target instanceof HTMLInputElement && !["button", "checkbox", "radio", "range", "submit", "reset"].includes(target.type);
-}
-
 export interface LookInputOptions {
   canvas: HTMLElement;
   model: LookModel;
@@ -283,7 +277,8 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     options.requestFrame();
   };
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (isTextField(event.target) || options.capturing?.()) return;
+    // A focused control keeps the keys it uses: a slider its arrows, a text field all of them.
+    if (controlTakesKey(event.target, event.key) || options.capturing?.()) return;
     if (event.key === "Escape") {
       event.preventDefault();
       options.onExit();

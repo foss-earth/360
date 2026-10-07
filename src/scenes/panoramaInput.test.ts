@@ -106,6 +106,30 @@ describe("panorama look input", () => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     expect(onExit).toHaveBeenCalledTimes(2);
   });
+
+  it("leaves a focused slider its arrow keys, and the rest to the panorama", () => {
+    const canvas = document.createElement("canvas");
+    document.body.append(canvas);
+    const onExit = vi.fn();
+    const model = createLookModel({ headingDeg: 0, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
+    const input = attachLookInput({ canvas, model, onExit, onUserInput: vi.fn(), requestFrame: vi.fn() });
+    const slider = document.createElement("input");
+    slider.type = "range";
+    document.body.append(slider);
+    // The arrow moves the slider's thumb, and only that.
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(model.moving()).toBe(false);
+    slider.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowLeft", bubbles: true }));
+    // A slider has no use for Escape: it still leaves the panorama.
+    slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(onExit).toHaveBeenCalledTimes(1);
+    // A button keeps Space and Enter, so the arrows look.
+    const button = document.createElement("button");
+    document.body.append(button);
+    button.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(model.moving()).toBe(true);
+    input.detach();
+  });
 });
 
 describe("panorama wheel input", () => {
