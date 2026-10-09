@@ -37,7 +37,7 @@
       "destinations": [
         {
           "path": "src/math.ts",
-          "sha256": "6a652d6410da5cc2182d4789b36c3779c812517b2c36133e20a323971b1d4d6c"
+          "sha256": "dd51cf67ca00f9a99d45d39a2b120537f2e1857f8bc836e53760416d01a952bf"
         }
       ],
       "transformation": "Retain orb/window/ray geometry; shared vector and representation/geographic functions are consumed through their public owners."
@@ -89,7 +89,7 @@
       "destinations": [
         {
           "path": "src/look.ts",
-          "sha256": "605665b6416fba2637662a07501c6893a0a1c1a68e5ab2e06dafea1c0c5b9fef"
+          "sha256": "6cbde32cfbb7fe7f38d741fcfa60a10270f8074aaeec6d28cb1ef7f957eabe78"
         },
         {
           "path": "src/browserInput.ts",
@@ -109,7 +109,7 @@
         },
         {
           "path": "tests/browserInput.test.ts",
-          "sha256": "0560f59d564510ba6274c4777caad4bceb5361b40850a7dfc4538b09656b7a46"
+          "sha256": "90593ca031a64f160fe0959b073f55c857379e25e8e449d07b0388cfe82a3e50"
         }
       ],
       "transformation": "Retain look and Escape/typing/controller/slider/trackpad/mouse input cases; add causal late intent and pointer cleanup coverage."
@@ -157,7 +157,7 @@
       "destinations": [
         {
           "path": "src/viewer.ts",
-          "sha256": "481a8c5163c12abc18753c1e08843d92849e914509ffd93dcb9fc3a2863194d6"
+          "sha256": "0aa29504d4605c1092a24bef9908bb0d8afe63493763d06e2a1d3a7aeb5cadce"
         },
         {
           "path": "src/resources.ts",
@@ -503,7 +503,7 @@
     }
   ],
   "primarySourceSnapshot": {
-    "createdAtUtc": "2026-10-09T21-18-52Z",
+    "createdAtUtc": "2026-10-09T21-35-20Z",
     "status": "source-only; no qualification or artifact seal",
     "authoredFiles": [
       {
@@ -544,8 +544,8 @@
       },
       {
         "path": "README.md",
-        "sha256": "d54b7c14398af4f7e5202aa263232091e74279a59e7a567da011b0f4aa062f54",
-        "bytes": 10546,
+        "sha256": "b4eeb6d275ca85009fe38e36a30b8fcaea29ca9aa0d48979cea58efc587f1e1f",
+        "bytes": 11489,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {
@@ -610,8 +610,8 @@
       },
       {
         "path": "fixtures/installed-consumer.mjs",
-        "sha256": "7fac1091d939f016f59ec613d78ed8876cfc5a3cceac6b83e03fae1250d83333",
-        "bytes": 39145,
+        "sha256": "a7986679794636835bf5ea066b33fbc18c01408621975b282537f57b5a350867",
+        "bytes": 47217,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {
@@ -645,6 +645,12 @@
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {
+        "path": "tests/refinementSettlement.test.ts",
+        "sha256": "000c1bf3ebbec61f3e9bd9907026af301c5fac7b6ce7470a3e3d5fe798106638",
+        "bytes": 10176,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
         "path": "tests/selection.test.ts",
         "sha256": "4b21509766b988be33ed56e4b7e00381b7c692624a58e5fcf7b57d57e969e8ee",
         "bytes": 4212,
@@ -652,14 +658,14 @@
       },
       {
         "path": "tests/tiledFallback.test.ts",
-        "sha256": "b5cf6fbffd64ebb460d9d8f35fa3497c069776fe080362e7278f2e4717f003ed",
-        "bytes": 10664,
+        "sha256": "284fa21e36cdbbef3be6a26b460286a99d9bc6374ef1e85e34a538cce8fc1929",
+        "bytes": 10809,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {
         "path": "tests/warming.test.ts",
-        "sha256": "e968d70a2846e6636c085ca25e50ea0b5bdaf18a9fb953785933dcbdc6591e52",
-        "bytes": 7373,
+        "sha256": "d515742089c841016304e682661d85c4159c6cc3aa6d89066e0cb19c68709d34",
+        "bytes": 7362,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       }
     ],
@@ -1165,5 +1171,108 @@
     },
     "rollback": "Rollback per-acquisition composition and nullable cache-source host/types together with exact retained prior source receipt. Prior staged cached fallback is preserved evidence, not faithful acceptance. Original canonical source remains retained; no child cutover.",
     "release": "EXPLICIT SOURCE-ONLY RELEASE: 360/main sole-writer lease returned to primary after physical seals. No further child writes/checks without renewal."
+  },
+  "refinementSettlementRegressionSourceIncrement": {
+    "status": "SOURCE-ONLY; new regression bodies unexecuted; primary production repair untouched",
+    "beforeEvidence": "build/source-only/2026-10-09T21-26-55Z-refinement-settlement-before",
+    "beforeManifestSha256": "51c08802cc6ad9f2343fc0b9cb0f7ac72f9875c2c9be28a5de538175d13900ef",
+    "primaryProductionBaseline": {
+      "path": "src/viewer.ts",
+      "bytes": 53369,
+      "sha256": "0aa29504d4605c1092a24bef9908bb0d8afe63493763d06e2a1d3a7aeb5cadce",
+      "unchangedByChild": true
+    },
+    "newSourceFixture": "tests/refinementSettlement.test.ts",
+    "actualInstalledFixture": "fixtures/installed-consumer.mjs through scripts/check-public-consumer.mjs",
+    "publicRuntimeImports": [
+      "@foss-earth/360/viewer",
+      "@foss-earth/images"
+    ],
+    "ownershipProof": "Actual createImageSessionBroker/createImageSourceCache; cache operation scopes reserve actual sourceGpu grants; supplied output textures are lifecycle fixtures, not native/device qualification.",
+    "namedFixtureBytes": {
+      "preparedPreview": 24,
+      "outgoingWhole": 64,
+      "incomingTiles": 128,
+      "allCommonPools": 1024
+    },
+    "causalAssertions": [
+      "Wait actual published whole identity and a subsequent Node host turn before next explicit host onFrame; no fixed microtask counter",
+      "Published incoming final display survives outgoing actual cache release wrapper failure and incoming actual grant.settle wrapper failure, in that causal order",
+      "Retained preview24 + displayed incoming128 have two actual cache holds/current source scope/live sourceGpu152; outgoing64 disposed once/released; overlap0",
+      "Private incoming final-show error and outgoing restore error still attempt actual incoming cache release, including a throwing post-release wrapper, preserving all three causal leaves in order",
+      "Private incoming disposed once/released and never settled; preview24 + outgoing64 remain held/current with sourceGpu88 and overlap0",
+      "Both source and installed cases fully dispose preview/whole/tiles once and leave no cache holders, rendering holds or live common grants"
+    ],
+    "existingInstalledFixtureBytesRetained": true,
+    "existingInstalledBeforeSha256": "4a269675819a8a6713e747482ac91ca15dc756ac5a320991ded48ad9ff5f4249",
+    "existingPrimaryTestBodiesUnchanged": [
+      "tests/tiledFallback.test.ts",
+      "tests/warming.test.ts"
+    ],
+    "changedPaths": [
+      "tests/refinementSettlement.test.ts",
+      "fixtures/installed-consumer.mjs",
+      "README.md",
+      "PROVENANCE.json",
+      "SOURCE_RECEIPT.json"
+    ],
+    "productionDepsLocksExportsHistoryRefsIndexCanonicalOtherOwnerFilesUntouched": true,
+    "checksExecutedByChild": [],
+    "acceptedArtifacts": [],
+    "actualConsumerAdoption": null,
+    "communityDirectiveAcknowledgement": {
+      "reread": [
+        "../0sfs/build/repository-split/coordination.md",
+        "../0sfs/build/repository-split/assignments/community-documents-all-owners.md"
+      ],
+      "mandatoryRule": "You cannot have AI as a co-author, or your contributions will be rejected.",
+      "placement": "Preserved AGENTS policy and later CONTRIBUTING Commit attribution section; no README/top-of-CONTRIBUTING policy line",
+      "rationale": "Preserved advertising/endorsement ban for AI vendor contribution credits and human responsibility for accuracy/review/provenance/rights.",
+      "realFiles": [
+        {
+          "path": "AGENTS.md",
+          "bytes": 391,
+          "sha256": "b9add53cda00a9ea9b821b325006f5f27cd459da1e4999b1f92a946ba1aabf7d"
+        },
+        {
+          "path": "CODE_OF_CONDUCT.md",
+          "bytes": 3442,
+          "sha256": "c3a907b9e659a0f5a4c701be1b34a7d416526c3a99f129bf4d3b9db09c7ffa9d"
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "bytes": 2233,
+          "sha256": "691d3378a454a76d5d818c03fc981ea875344b76c466bac7b649ef46e3fbee61"
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 34523,
+          "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+        },
+        {
+          "path": "SECURITY.md",
+          "bytes": 791,
+          "sha256": "6baf6d3c1755360f5d902275c893074fd17af2fc10c140fe932b8a90d77d9942"
+        },
+        {
+          "path": "NOTICE",
+          "bytes": 359,
+          "sha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993"
+        }
+      ],
+      "readmeLocalLinks": [
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "SECURITY.md"
+      ],
+      "communityFilesPackageMetadataAndInheritedLicenseNoticesPreserved": true,
+      "children": [],
+      "noChildWriters": true,
+      "newSharedCiPolicyCallerConformancePending": true,
+      "noRemoteAdmissionClaim": true
+    },
+    "rollback": "Remove only these new regression additions and README paragraph using exact retained before bytes; leave primary production repair/current existing tests untouched.",
+    "release": "EXPLICIT SOURCE-ONLY RELEASE follows final physical manifest/receipt seals; no further child writes or checks without renewal."
   }
 }

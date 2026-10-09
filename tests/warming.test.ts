@@ -19,7 +19,7 @@ function warmingFixture(pending=false){
       // Keep its real grant until its actual late-output disposal, not abort.
       const keep=grant.retain();allocations++;let ended=false;
       const resource:Cached={representation:record,key:"tiles@v1",source:{texture:{} as never,kind:"tiles"},gpuBytes:128,isCurrent:()=>operation.isCurrent(),onFrame:tick,
-        settleReplacement:()=>grant.settleReplacement(),dispose(){if(ended)return;ended=true;dispose();try{keep();}finally{grant.release();}}};
+        settleReplacement:()=>grant.settle(),dispose(){if(ended)return;ended=true;dispose();try{keep();}finally{grant.release();}}};
       if(pending)await ready.promise;
       return resource;
     }});

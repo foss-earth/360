@@ -127,6 +127,19 @@ fallback reference, so reusing it with a changed preview cannot retain a private
 fallback or add another atlas allocation. The host's existing broker and cache
 still own admission, cancellation, generations and idle retention.
 
+Refinement commits a successfully displayed incoming source before attempting
+outgoing release and replacement settlement. All cleanup calls are attempted;
+their failures report in operation order while the displayed source retains its
+cache hold. If the final display fails before publication, restoration and incoming
+release are both attempted, preserving display, restoration and release errors
+in order. `tests/refinementSettlement.test.ts` and the actual installed consumer
+fixture use the common Images broker/cache and real scope grants: preview 24 bytes,
+outgoing 64 bytes and incoming 128 bytes. Throwing wrappers run only after actual
+release/settlement. The fixtures check live source identities, reservations,
+overlap, disposal counts and final complete cleanup. Injected texture objects are
+lifecycle fixtures; they make no GPU/device qualification claim. This new
+regression increment is source-only and has not been executed.
+
 In a reserved window, primary should install exact independently packed owner
 artifacts, run `npm run ci` once, then `npm run test:consumer --
 --artifacts=build/artifacts/consumer-dependencies.json`. The latter expects an array

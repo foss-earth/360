@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { attachLookInput } from "../src/browserInput.js";
 import { createLookModel, zoomFov, type LookSettings } from "../src/index.js";
 import { controlTakesKey } from "@felipegalind0/gamepad-tools/browser";
-import { createWheelGestureClassifier } from "@foss-earth/engine/core";
+import { createWheelGestureClassifier as createEngineWheelGestureClassifier } from "@foss-earth/engine/core";
+const createWheelGestureClassifier: Parameters<typeof attachLookInput>[0]["createWheelGestureClassifier"] = options =>
+  createEngineWheelGestureClassifier({ ...options, nowMs: () => performance.now() });
 
 const SETTINGS: LookSettings = {
   dragSensitivity: 0.15, swipeSensitivity: 0.1, lookRate: 90, zoomPerNotch: 0.1, zoomRate: 0.5, pinchGain: 1, inertiaHalfLifeMs: 100,

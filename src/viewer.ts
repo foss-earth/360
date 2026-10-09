@@ -319,8 +319,11 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
     hoverRelease?.(); hoverRelease = null;
   }
   function settlePreviewReplacements(entry: Entry): void {
-    for (const source of entry.pendingSettlements) source.settleReplacement();
+    const pending = [...entry.pendingSettlements];
     entry.pendingSettlements.clear();
+    const errors: unknown[] = [];
+    for (const source of pending) { try { source.settleReplacement(); } catch (error) { errors.push(error); } }
+    if (errors.length) throw new AggregateError(errors, "Preview replacement settlement failed.");
   }
   function teardown(state: Immersion, releaseShown = true): ViewerSource | null {
     if (immersion !== state) return null; immersion = null;
@@ -391,7 +394,14 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
     }).then(async incoming => {
       if (!current() || incoming.isCurrent?.() === false) { incoming.release(); return; }
       const old = state.shown, candidate = { source: incoming, entry }; incomingSources.add(candidate);
-      const discard = (): void => { if (current() && phase === "immersive") renderer.immersion.show(state.shown.isCurrent?.() === false ? null : { source: sourceOf(state.entry, state.shown) }); incoming.release(); };
+      let published = false;
+      const discard = (): void => {
+        const errors: unknown[] = [];
+        for (const release of [() => { if (current() && phase === "immersive") renderer.immersion.show(state.shown.isCurrent?.() === false ? null : { source: sourceOf(state.entry, state.shown) }); }, () => incoming.release()]) {
+          try { release(); } catch (error) { errors.push(error); }
+        }
+        if (errors.length) throw new AggregateError(errors, "Private image refinement cleanup failed.");
+      };
       try {
         if (incoming.source.kind === "tiles" && old.representation.role !== "preview") { state.refinePhase = "covering"; await awaitViewReady(incoming, entry, controller.signal); }
         if (!current() || incoming.isCurrent?.() === false) { discard(); return; }
@@ -401,11 +411,19 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
         if (!current() || incoming.isCurrent?.() === false) { discard(); return; }
         if (old.representation.role !== "preview" && incoming.viewReady && !incoming.viewReady()) await awaitViewReady(incoming, entry, controller.signal);
         if (!current() || incoming.isCurrent?.() === false) { discard(); return; }
-        state.shown = incoming; state.loading = null; renderer.immersion.show({ source: sourceOf(state.entry, incoming) });
-        if (old !== state.entry.preview) old.release();
-        settlePreviewReplacements(state.entry);
-        incoming.settleReplacement(); emit();
-      } catch (error) { discard(); if (current()) report(entry, "image", error); }
+        renderer.immersion.show({ source: sourceOf(state.entry, incoming) });
+        state.shown = incoming; state.loading = null; published = true;
+        const errors: unknown[] = [];
+        for (const release of [() => { if (old !== state.entry.preview) old.release(); },
+          () => settlePreviewReplacements(state.entry), () => incoming.settleReplacement(), emit]) {
+          try { release(); } catch (error) { errors.push(error); }
+        }
+        if (errors.length) throw new AggregateError(errors, "Published image refinement cleanup failed.");
+      } catch (error) {
+        let failure = error;
+        if (!published) { try { discard(); } catch (release) { failure = new AggregateError([error, release], "Image refinement failed."); } }
+        if (current()) report(entry, "image", failure);
+      }
       finally { incomingSources.delete(candidate); }
     }, error => {
       if (current()) { state.failed.add(choice.representation.id); report(entry, "image", error); }

@@ -196,7 +196,7 @@ let resolveLate;acquire=()=>new Promise(resolve=>{resolveLate=resolve;});const s
           calls.push(request);
           const held=await cache.acquire("warming@v1",{...request,estimatedGpuBytes:128,async load(operation,policy){
             scope=operation;const grant=operation.reserve("sourceGpu",128,"installed warming fixture allocation",{overlap:policy.overlap}),keep=grant.retain();allocations++;let ended=false;
-            const resource={representation:tiled,key:"warming@v1",gpuBytes:128,source:{texture:{},kind:"tiles"},isCurrent:()=>operation.isCurrent(),onFrame(){ticks++;return false;},settleReplacement:()=>grant.settleReplacement(),dispose(){if(ended)return;ended=true;retired++;try{keep();}finally{grant.release();}}};
+            const resource={representation:tiled,key:"warming@v1",gpuBytes:128,source:{texture:{},kind:"tiles"},isCurrent:()=>operation.isCurrent(),onFrame(){ticks++;return false;},settleReplacement:()=>grant.settle(),dispose(){if(ended)return;ended=true;retired++;try{keep();}finally{grant.release();}}};
             if(pending)await ready;
             return resource;
           }});
@@ -244,15 +244,15 @@ let resolveLate;acquire=()=>new Promise(resolve=>{resolveLate=resolve;});const s
     const tiles={id:"tiles",role:"immersion",projection:"tiled-cube",mimeType:"image/png",encodedBytes:126,warp:"gnomonic",faceSize:8,tileSize:2,gutter:0,levelBytes:[6,24,96],url:"https://fixture.invalid/tiles/"};
     const placed={...input,id:"fallback",asset:{...input.asset,id:"fallback-asset",revision:"v1",representations:[first,published,privatePreview,tiles]}};
     const reads=[],textures=new Map(),events=[],loadErrors=[],releaseErrors=[new Error("atlas release"),new Error("preview release")],settleErrors=[new Error("atlas settle"),new Error("preview settle")],calls=[];
-    let owner,selected=published,atlases=0,decoded=0,closed=0,resolveReady;const ready=new Promise(resolve=>{resolveReady=resolve;});
+    let owner,selected=published,atlases=0,decoded=0,closed=0,resolveReady,resolveUploading,resolveLoadFailed;const uploading=new Promise(resolve=>{resolveUploading=resolve;});const loadFailed=new Promise(resolve=>{resolveLoadFailed=resolve;});const ready=new Promise(resolve=>{resolveReady=resolve;});
     const outputError=new Error("late output disposal"),inputError=new Error("late decoded input close");
     const files=createImageFileService({broker,priority:()=>0,limits:()=>({responseBytes:1000,timeoutMs:1000}),fetch:async url=>{reads.push(String(url));return new Response(png,{headers:{"content-type":"image/png"}});},decode:async()=>{const index=decoded++;return{width:1,height:1,close(){closed++;if(mode==="cancel"&&index===0)throw inputError;}};}});
     const tracked={...cache,async acquire(key,request){
-      const held=await cache.acquire(key,{...request,async load(scope,policy){try{return await request.load(scope,policy);}catch(error){loadErrors.push(error);throw error;}}});
+      const held=await cache.acquire(key,{...request,async load(scope,policy){try{return await request.load(scope,policy);}catch(error){loadErrors.push(error);resolveLoadFailed();throw error;}}});
       if(mode!=="throw")return held;const tile=held.resource.representation.projection==="tiled-cube",index=tile?0:1;
       return{...held,release(){held.release();calls.push(tile?"atlas release":"preview release");throw releaseErrors[index];},settleReplacement(){held.settleReplacement();calls.push(tile?"atlas settle":"preview settle");throw settleErrors[index];}};
     }};
-    const ports={broker,cache:tracked,files,atlasDevice:{},uploader:{async upload(request){if(mode==="cancel")await ready;const texture={label:request.label};textures.set(request.label,texture);let ended=false;return{kind:"cube",width:1,height:1,levels:1,gpuBytes:24,texture,complete:true,dispose(){if(ended)return;ended=true;events.push("cube");if(mode==="cancel")throw outputError;}};},pump:()=>0,busy:()=>false,setLimits(){},stats:()=>({queuedJobs:0,outstandingBytes:0,lastFrameBytes:0,uploadedBytes:0,publishedCompletionFailures:0,lastPublishedCompletionFailure:null}),cancelAll(){}},
+    const ports={broker,cache:tracked,files,atlasDevice:{},uploader:{async upload(request){resolveUploading();if(mode==="cancel")await ready;const texture={label:request.label};textures.set(request.label,texture);let ended=false;return{kind:"cube",width:1,height:1,levels:1,gpuBytes:24,texture,complete:true,dispose(){if(ended)return;ended=true;events.push("cube");if(mode==="cancel")throw outputError;}};},pump:()=>0,busy:()=>false,setLimits(){},stats:()=>({queuedJobs:0,outstandingBytes:0,lastFrameBytes:0,uploadedBytes:0,publishedCompletionFailures:0,lastPublishedCompletionFailure:null}),cancelAll(){}},
       previewSheetsEnabled:()=>false,maxTextureSide:()=>4096,whenReady:async()=>{},estimate:record=>({encoded:0,decoded:0,sourceGpu:record.projection==="tiled-cube"?tileAtlasLayout(record,4096,4096).gpuBytes:24,uploadOutstanding:0}),
       choice:{preview:()=>({representation:selected,limitation:null}),immersion:()=>null,faceTexels:()=>1},
       tiles:{memoryBytes:()=>4096,limits:()=>({requests:1,waiting:1,decodes:1,uploadsPerFrame:1,retries:0,retryDelayMs:1,fadeMs:0}),selection:()=>({texelsPerPixel:1,marginDeg:0,levelCap:0}),outlines:()=>false},
@@ -264,11 +264,11 @@ let resolveLate;acquire=()=>new Promise(resolve=>{resolveLate=resolve;});const s
       const initial=await owner.prepare(placed,new AbortController().signal);await initial.ready();owner.replaceImages([initial]);
       const a=await acquire();assert.equal(a.source.texture,textures.get("fallback-asset/published"));assert.equal(atlases,1);assert.equal(cache.stats().heldReferences,3);a.release();assert.equal(cache.stats().heldReferences,1);
       selected=privatePreview;const hidden=await owner.prepare(placed,new AbortController().signal);await hidden.ready();const excluded=await acquire();assert.equal(excluded.source.texture,a.source.texture);assert.notEqual(excluded.source.texture,textures.get("fallback-asset/private"));excluded.release();hidden.dispose();
-      selected=first;const replacement=await owner.prepare(placed,new AbortController().signal);await replacement.ready();owner.replaceImages([replacement]);const b=await acquire();assert.equal(b.source.texture,textures.get("fallback-asset/first"));assert.notEqual(b.source.texture,a.source.texture);assert.equal(b.source.tiles.atlas,a.source.tiles.atlas);assert.equal(atlases,1);b.release();assert.equal(cache.stats().heldReferences,1);owner.dispose();assert.equal(cache.stats().heldReferences,0);assert.equal(cache.stats().keptGpuBytes,tileAtlasLayout(tiles,4096,4096).gpuBytes+72);cache.setKeptGpuBytes(0);
+      selected=first;const replacement=await owner.prepare(placed,new AbortController().signal);await replacement.ready();owner.replaceImages([replacement]);initial.dispose();const b=await acquire();assert.equal(b.source.texture,textures.get("fallback-asset/first"));assert.notEqual(b.source.texture,a.source.texture);assert.equal(b.source.tiles.atlas,a.source.tiles.atlas);assert.equal(atlases,1);b.release();assert.equal(cache.stats().heldReferences,1);owner.dispose();assert.equal(cache.stats().heldReferences,0);assert.equal(cache.stats().keptGpuBytes,tileAtlasLayout(tiles,4096,4096).gpuBytes+72);cache.setKeptGpuBytes(0);
     }else if(mode==="cancel"){
-      const abort=new AbortController(),work=acquire(abort.signal),observed=work.catch(error=>error);for(let n=0;n<80;n++)await Promise.resolve();assert.equal(broker.pools.stats().decoded.reserved,24);assert.equal(closed,0);
+      const abort=new AbortController(),work=acquire(abort.signal),observed=work.catch(error=>error);await uploading;assert.equal(broker.pools.stats().decoded.reserved,24);assert.equal(closed,0);
       const reason=new Error("cancelled tiled acquisition");abort.abort(reason);assert.equal(await observed,reason);assert.equal(cache.stats().heldReferences,0);assert.deepEqual(events,["atlas"]);assert.equal(broker.pools.stats().decoded.reserved,24);
-      resolveReady();for(let n=0;n<80;n++)await Promise.resolve();assert.deepEqual(events,["atlas","cube"]);assert.equal(closed,6);const failure=loadErrors.find(error=>leaves(error).includes(outputError));assert(failure);const errors=leaves(failure);assert(errors.indexOf(outputError)<errors.indexOf(inputError));
+      resolveReady();await loadFailed;for(let n=0;n<20;n++)await Promise.resolve();assert.deepEqual(events,["atlas","cube"]);assert.equal(closed,6);const failure=loadErrors.find(error=>leaves(error).includes(outputError));assert(failure);const errors=leaves(failure);assert(errors.indexOf(outputError)<errors.indexOf(inputError));
     }else if(mode==="throw"){
       const source=await acquire();assert.throws(()=>source.settleReplacement(),error=>{assert.deepEqual(leaves(error),settleErrors);return true;});assert.equal(broker.pools.stats().overlap.reserved,0);source.settleReplacement();
       assert.throws(()=>source.release(),error=>{assert.deepEqual(leaves(error),releaseErrors);return true;});source.release();assert.deepEqual(calls,["atlas settle","preview settle","atlas release","preview release"]);assert.equal(cache.stats().heldReferences,0);
@@ -281,6 +281,80 @@ let resolveLate;acquire=()=>new Promise(resolve=>{resolveLate=resolve;});const s
     owner.dispose();cache.dispose();broker.dispose();for(let n=0;n<20;n++)await Promise.resolve();assert.deepEqual(broker.pools.live(),[]);
   }
   for(const mode of ["published","omitted","null","stale-revision","foreign-asset","private-id","throw","cancel"])await fallbackCase(mode);
+}
+{
+  // Actual installed Images cache, scopes and grants retain published ownership
+  // even if supplied cleanup wrappers throw after doing their real operation.
+  const {createImageSessionBroker,createImageSourceCache}=await import("@foss-earth/images");
+  const {setImmediate}=await import("node:timers");
+  const leaves=error=>error instanceof AggregateError?Array.from(error.errors).flatMap(leaves):[error];
+  async function settlementCase(mode){
+    const broker=createImageSessionBroker({requests:1,decodes:1,pools:{encoded:1024,decoded:1024,sourceGpu:1024,overlap:1024,uploadOutstanding:1024}});
+    const cache=createImageSourceCache({broker,keptGpuBytes:0,gpuBytes:resource=>resource.gpuBytes});
+    const record=(id,role,projection="cube")=>({id,role,projection,mimeType:"image/png",encodedBytes:60});
+    const preview=record("preview-24","preview"),whole=record("whole-64","immersion"),tiles=record("tiles-128","immersion","tiled-cube");
+    const placed={...input,id:"settlement",asset:{...input.asset,id:"settlement-asset",revision:"v1",representations:[preview,whole,tiles]}};
+    const scopes=new Map(),grants=new Map(),textures=new Map(),disposed=new Map(),released=new Map(),settled=new Map(),events=[],failures=[];
+    const outgoingError=new Error("outgoing wrapper after actual cache release"),settlementError=new Error("incoming wrapper after actual grant settlement");
+    const publicationError=new Error("incoming final show"),restorationError=new Error("outgoing restoration show"),incomingReleaseError=new Error("incoming wrapper after actual private cache release");
+    let desired=whole,armed=false,drawn=null,resolveFailure,resolveWhole,activeHolds=0;
+    const failed=new Promise(resolve=>{resolveFailure=resolve;}),wholePublished=new Promise(resolve=>{resolveWhole=resolve;});
+    const bump=(map,id)=>map.set(id,(map.get(id)??0)+1);
+    const keepRendering=()=>{activeHolds++;let ended=false;return()=>{if(!ended){ended=true;activeHolds--;}};};
+    const navigationAbort=new AbortController();
+    const navigationLease={...lease,signal:navigationAbort.signal,released:false,holdRendering:keepRendering,setPresentationView(){},release(){if(this.released)return;this.released=true;navigationAbort.abort();}};
+    const resources={preview:()=>({representation:preview,limitation:null}),immersion:()=>({representation:desired,limitation:null}),faceTexels:()=>64,
+      async acquire(_input,choice,request){
+        const record=choice.representation,bytes=record.id===preview.id?24:record.id===whole.id?64:128;
+        const held=await cache.acquire(record.id,{...request,estimatedGpuBytes:bytes,async load(scope,policy){
+          const grant=scope.reserve("sourceGpu",bytes,record.id,{overlap:policy.overlap});scopes.set(record.id,scope);grants.set(record.id,grant);
+          const texture={label:record.id};textures.set(record.id,texture);let ended=false;
+          return{representation:record,gpuBytes:bytes,source:{texture,kind:record.id===tiles.id?"tiles":"cube"},isCurrent:()=>scope.isCurrent(),
+            dispose(){if(ended)return;ended=true;bump(disposed,record.id);events.push(`${record.id}:dispose`);},
+            settleReplacement(){grant.settle();bump(settled,record.id);events.push(`${record.id}:settle`);if(record.id===tiles.id&&armed&&mode==="published")throw settlementError;}};
+        }});
+        let ended=false;
+        return{representation:record,source:held.resource.source,isCurrent:held.resource.isCurrent,viewReady:()=>true,
+          release(){if(ended)return;ended=true;held.release();bump(released,record.id);events.push(`${record.id}:release`);if(armed&&mode==="published"&&record.id===whole.id)throw outgoingError;if(armed&&mode==="private"&&record.id===tiles.id)throw incomingReleaseError;},
+          settleReplacement:()=>held.settleReplacement()};
+      }};
+    const options={...viewerOptions,resources,holdRendering:keepRendering,settings:()=>({...viewerOptions.settings(),previewHoldMs:null}),
+      renderer:{...viewerOptions.renderer,immersion:{visible:false,show(next){
+        if(armed&&mode==="private"&&next&&!next.next){
+          if(next.source.texture===textures.get(tiles.id)){events.push("incoming:show-throw");throw publicationError;}
+          if(next.source.texture===textures.get(whole.id)){events.push("outgoing:restore-throw");throw restorationError;}
+        }
+        drawn=next?.source.texture??null;
+      }}},
+      navigation:{...viewerOptions.navigation,acquire:()=>({ok:true,lease:navigationLease})},
+      input:{cancelOnInput:()=>({stop(){},press:()=>null}),attach:()=>({detach(){}})},
+      failure(_input,kind,error){if(kind==="image"){failures.push(error);resolveFailure(error);}}};
+    const owner=createImageViewer(options),off=owner.subscribe(()=>{if(owner.currentSources(placed.id).shown===whole.id)resolveWhole();});
+    try{
+      const prepared=await owner.prepare(placed,new AbortController().signal);await prepared.ready();owner.replaceImages([prepared]);assert.equal(await owner.enter(placed.id),true);await wholePublished;
+      // One host turn after actual publication completes the prior finalizer;
+      // the next refinement starts from an explicitly supplied host frame.
+      await new Promise(resolve=>setImmediate(resolve));events.length=0;
+      assert.equal(broker.pools.stats().sourceGpu.reserved,88);assert.equal(cache.stats().heldReferences,2);
+      armed=true;desired=tiles;owner.onFrame({now:0,dtMs:0});const failure=await failed;
+      if(mode==="published"){
+        assert.deepEqual(leaves(failure),[outgoingError,settlementError]);assert.deepEqual(events,["whole-64:dispose","whole-64:release","tiles-128:settle"]);
+        assert.deepEqual(owner.currentSources(placed.id),{preview:preview.id,shown:tiles.id});assert.equal(drawn,textures.get(tiles.id));
+        assert.equal(scopes.get(tiles.id).isCurrent(),true);assert.equal(scopes.get(whole.id).isCurrent(),false);assert.equal(grants.get(whole.id).released,true);
+        assert.equal(disposed.get(whole.id),1);assert.equal(disposed.get(tiles.id)??0,0);assert.equal(released.get(whole.id),1);assert.equal(released.get(tiles.id)??0,0);assert.equal(settled.get(tiles.id),1);
+        assert.equal(broker.pools.stats().sourceGpu.reserved,152);assert.deepEqual(broker.pools.live().map(grant=>[grant.label,grant.bytes,grant.overlap]),[[preview.id,24,false],[tiles.id,128,false]]);
+      }else{
+        assert.deepEqual(leaves(failure),[publicationError,restorationError,incomingReleaseError]);assert.deepEqual(events,["incoming:show-throw","outgoing:restore-throw","tiles-128:dispose","tiles-128:release"]);
+        assert.deepEqual(owner.currentSources(placed.id),{preview:preview.id,shown:whole.id});assert.equal(drawn,textures.get(whole.id));
+        assert.equal(scopes.get(whole.id).isCurrent(),true);assert.equal(scopes.get(tiles.id).isCurrent(),false);assert.equal(grants.get(tiles.id).released,true);
+        assert.equal(disposed.get(tiles.id),1);assert.equal(released.get(tiles.id),1);assert.equal(settled.get(tiles.id)??0,0);assert.equal(disposed.get(whole.id)??0,0);assert.equal(released.get(whole.id)??0,0);
+        assert.equal(broker.pools.stats().sourceGpu.reserved,88);assert.deepEqual(broker.pools.live().map(grant=>[grant.label,grant.bytes,grant.overlap]),[[preview.id,24,false],[whole.id,64,false]]);
+      }
+      assert.equal(cache.stats().heldReferences,2);assert.equal(broker.pools.stats().overlap.reserved,0);assert.equal(activeHolds,0);assert.deepEqual(failures,[failure]);
+    }finally{off();owner.dispose();cache.dispose();broker.dispose();}
+    assert.equal(disposed.get(preview.id),1);assert.equal(disposed.get(whole.id),1);assert.equal(disposed.get(tiles.id),1);assert.equal(cache.stats().heldReferences,0);assert.deepEqual(broker.pools.live(),[]);assert.equal(activeHolds,0);
+  }
+  await settlementCase("published");await settlementCase("private");
 }
 const tabs=createViewerTabs({document:doc,viewer:{status:()=>({phase,active:"placed",target:null}),subscribe(fn){subscriber=fn;return()=>{stopped++;};},exit(){phase="overview";subscriber({phase,active:null,target:null});},activateAction:async()=>false},image:()=>input,sectionTitle:(_tab,section)=>section,parameterSection({main}){const element=doc.createElement("div");if(main)element.append(main);return{element,destroy:()=>{}};},sections(entries){const element=doc.createElement("div");element.append(...entries.map(entry=>entry.element));return{element,destroy:()=>{}};},representationText:record=>record.id,detail:()=>null});
 assert.equal(tabs.getSnapshot().title,"360: Published image");assert.match(tabs.panorama.textContent,/Injected photographer/);tabs.leave();assert.equal(tabs.getSnapshot().title,null);tabs.destroy();tabs.destroy();assert.equal(stopped,1);

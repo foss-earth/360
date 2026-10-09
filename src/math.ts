@@ -1,6 +1,5 @@
 /** Orb/window and viewer rays only; no geographical conversion. */
-import { add, cross, dot, length, normalize, scale, sub, type Vec3 } from "@foss-earth/images";
-const RAD_TO_DEG = 180 / Math.PI;
+import { add, dot, length, normalize, scale, sub, type Vec3 } from "@foss-earth/images";
 // ─── Window mapping ────────────────────────────────────────────────────
 
 /** Camera to displayed marker, the quantities every mapping and test shares. */

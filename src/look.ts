@@ -29,11 +29,7 @@ export interface LookSettings {
 const INERTIA_STOP_DEG_PER_S = 0.05;
 /** A drag held still this long, ms, before its release has no glide. */
 const GLIDE_RELEASE_WINDOW_MS = 80;
-/** Pixels in a wheel "line" and a "page", to measure notches alike. */
-const WHEEL_LINE_PX = 16;
 const WHEEL_NOTCH_PX = 100;
-/** Browsers report a trackpad pinch as ctrl+wheel with deltaY = −100 ln(scale). */
-const PINCH_WHEEL_PX_PER_LOG_SCALE = 100;
 
 export function clampLook(state: LookState, settings: LookSettings): LookState {
   return {
