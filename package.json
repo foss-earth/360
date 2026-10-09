@@ -72,7 +72,11 @@
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",
     "SECURITY.md",
-    "SOURCE_RECEIPT.json"
+    "SOURCE_RECEIPT.json",
+    ".attribution.json",
+    ".attribution-release.json",
+    ".github/workflows/attribution-check.yml",
+    "deps/foss-earth-ci-1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e.tgz"
   ],
   "dependencies": {
     "@foss-earth/images": "0.1.0",
@@ -94,7 +98,8 @@
     "@felipegalind0/gamepad-tools": "0.1.0",
     "@eslint/js": "9.39.4",
     "globals": "17.6.0",
-    "@foss-earth/renderer": "0.1.0"
+    "@foss-earth/renderer": "0.1.0",
+    "@foss-earth/ci": "file:deps/foss-earth-ci-1db73d1ddb342e348a2c9e8387f7bbc7ebb3225e.tgz"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
