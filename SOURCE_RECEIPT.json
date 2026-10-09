@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "owner": "foss-earth/360",
-  "preparedAtUtc": "2026-10-09T21-35-20Z",
+  "preparedAtUtc": "2026-10-09T21-37-44Z",
   "status": "SOURCE-ONLY current bytes; checks/history/installed consumers/artifacts/adoption/admission UNRUN",
   "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d",
-  "priorSourceReceipt": "build/source-only/2026-10-09T21-35-20Z/SOURCE_RECEIPT.json.before",
-  "sourceManifestPath": "build/source-only/2026-10-09T21-35-20Z/source-manifest.json",
+  "priorSourceReceipt": "build/source-only/2026-10-09T21-37-44Z/SOURCE_RECEIPT.json.before",
+  "sourceManifestPath": "build/source-only/2026-10-09T21-37-44Z/source-manifest.json",
   "sourceManifestEncoding": "UTF-8 sorted path JSON array, indent2, trailing LF; ignored outputs and receipt excluded",
-  "sourceManifestSha256": "7bcaf8f6a2448a774748f24568e31011711cdd6efa1788b471d17ff15b4a937a",
+  "sourceManifestSha256": "0b4cb165e4d2b71911743545170a7acf0b369d00db46e652430973f538ef5ce0",
   "sourceFileCount": 65,
   "provenancePath": "PROVENANCE.json",
-  "provenanceSha256": "b43659fd4161a6195b892fad35ddc193eae3172f1d44bdbaea59a3e17ec1afbf",
+  "provenanceSha256": "f839371730343b597a185139c1a5ce7d5ff616c3a57685ecda21e13b3d26dc78",
   "publicExports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -113,7 +113,7 @@
     },
     {
       "path": "PROVENANCE.json",
-      "sha256": "b43659fd4161a6195b892fad35ddc193eae3172f1d44bdbaea59a3e17ec1afbf",
+      "sha256": "f839371730343b597a185139c1a5ce7d5ff616c3a57685ecda21e13b3d26dc78",
       "bytes": 66064
     },
     {
@@ -208,8 +208,8 @@
     },
     {
       "path": "package.json",
-      "sha256": "cf063a062dddc2a7666ddcfce1abb93d9384eb3e75c64695e53a72d2e678e235",
-      "bytes": 3957
+      "sha256": "9738179c6c3f284ac3e89c333477790fd3027d5fb39989613fae0115b1fecd52",
+      "bytes": 3994
     },
     {
       "path": "scripts/check-public-consumer.mjs",

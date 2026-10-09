@@ -503,7 +503,7 @@
     }
   ],
   "primarySourceSnapshot": {
-    "createdAtUtc": "2026-10-09T21-35-20Z",
+    "createdAtUtc": "2026-10-09T21-37-44Z",
     "status": "source-only; no qualification or artifact seal",
     "authoredFiles": [
       {
@@ -568,8 +568,8 @@
       },
       {
         "path": "package.json",
-        "sha256": "cf063a062dddc2a7666ddcfce1abb93d9384eb3e75c64695e53a72d2e678e235",
-        "bytes": 3957,
+        "sha256": "9738179c6c3f284ac3e89c333477790fd3027d5fb39989613fae0115b1fecd52",
+        "bytes": 3994,
         "status": "authored source/scaffold/adapter/fixture; UNRUN"
       },
       {

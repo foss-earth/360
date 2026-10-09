@@ -93,7 +93,8 @@
     "@foss-earth/ui": "0.1.0",
     "@felipegalind0/gamepad-tools": "0.1.0",
     "@eslint/js": "9.39.4",
-    "globals": "17.6.0"
+    "globals": "17.6.0",
+    "@foss-earth/renderer": "0.1.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
