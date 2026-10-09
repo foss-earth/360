@@ -1,0 +1,326 @@
+import { SRGB_ENCODE_GLSL, SRGB_DECODE_GLSL } from "@foss-earth/images/shaders";
+import { CUBE_VECTOR_GLSL } from "@foss-earth/cubemap/shaders";
+import { EQUIRECT_UV_GLSL, EQUIRECT_SAMPLE_GLSL, EQUIRECT_UV_UNIT_GLSL } from "@foss-earth/equirectangular/shaders";
+import { TILE_LOOKUP_GLSL } from "@foss-earth/tiled-cubemap/shaders";
+/**
+ * GLSL counterpart of panoramaShaders.ts, owned by FOSS Earth's renderer.
+ * The same analytic quad and immersion triangle work on WebGL 1 and 2;
+ * Babylon translates attributes, varyings and fragment depth for WebGL 2.
+ * WebGL textures hold encoded sRGB. Decode before blending and encode once
+ * at output, matching WebGPU's native sRGB texture sampling contract.
+ *
+ * SOURCE_TILES and NEXT_TILES draw a tiled cube (src/scenes/tiles/) over the
+ * preview cube the same draw samples: panoramaTiles looks the direction's cell
+ * up in the display table and takes one bilinear tap from the atlas.
+ *
+ * PANORAMA_LEAN (the renderer.experiments.panoramaShaders parameter) draws
+ * the same image with less per-pixel work: the orb's cap angle and window
+ * come from the CPU (its depth keeps this shader's arithmetic), immersion
+ * turns the view into the image's frame in the vertex shader, and a ray is
+ * normalized once where it must be, or not at all for a cube lookup, which
+ * only needs its direction.
+ */
+
+const EXTENSIONS = /* glsl */ `
+#extension GL_OES_standard_derivatives : require
+#ifdef PANORAMA_TEXTURE_GRADIENTS
+#extension GL_EXT_shader_texture_lod : enable
+#endif
+precision highp float;
+`;
+
+const CONTENT_UNIFORMS = /* glsl */ `
+uniform vec3 content0;
+uniform vec3 content1;
+uniform vec3 content2;
+`;
+
+const COMMON = /* glsl */ `
+${SRGB_DECODE_GLSL}
+
+${SRGB_ENCODE_GLSL}
+
+vec3 panoramaImageDirection(vec3 worldDirection) {
+  return vec3(dot(content0, worldDirection), dot(content1, worldDirection), dot(content2, worldDirection));
+}
+
+${CUBE_VECTOR_GLSL}
+
+${EQUIRECT_UV_UNIT_GLSL}
+
+${EQUIRECT_UV_GLSL}
+
+${TILE_LOOKUP_GLSL}
+
+${EQUIRECT_SAMPLE_GLSL}
+`;
+
+export const ORB_VERTEX_GLSL = /* glsl */ `
+precision highp float;
+attribute vec3 position;
+uniform mat4 viewRotProj;
+uniform vec3 quadCenter;
+uniform vec3 quadU;
+uniform vec3 quadV;
+varying vec3 vRel;
+void main(void) {
+  vec3 rel = quadCenter + position.x * quadU + position.y * quadV;
+  vRel = rel;
+  gl_Position = viewRotProj * vec4(rel, 1.0);
+}
+`;
+
+export const ORB_FRAGMENT_GLSL = /* glsl */ `
+#extension GL_EXT_frag_depth : require
+${EXTENSIONS}
+uniform mat4 viewRotProj;
+uniform vec3 markerRel;
+uniform float radius;
+uniform float tanPreviewHalfAngle;
+uniform float opacity;
+uniform vec4 outlineColor;
+uniform float outlineWidth;
+#ifdef PANORAMA_LEAN
+// The same for every pixel of a draw, so worked out once on the CPU (ORB_LEAN_UNIFORMS).
+uniform float sinAlpha;
+uniform float windowGain;
+uniform float identityWindow;
+#endif
+${CONTENT_UNIFORMS}
+#ifdef SOURCE_EQUIRECT
+uniform sampler2D panoramaEquirect;
+#else
+uniform samplerCube panoramaCube;
+#endif
+#ifdef SOURCE_TILES
+uniform sampler2D tileAtlas;
+uniform sampler2D tileTable;
+uniform vec4 tileLayout;
+uniform vec4 tileAtlasInfo;
+#endif
+varying vec3 vRel;
+${COMMON}
+
+void main(void) {
+  vec3 v = normalize(vRel);
+#ifdef PANORAMA_LEAN
+  // The distance, axis and depth keep the full shader's arithmetic: orbs that
+  // nearly coincide on screen must settle their depth ties the same way.
+  float d = length(markerRel);
+  vec3 a = markerRel / d;
+  float c = dot(a, v);
+  vec3 k = v - c * a;
+  float sinDelta = length(k);
+  bool inside = d <= radius;
+#else
+  float d = length(markerRel);
+  vec3 a = markerRel / d;
+  float c = dot(a, v);
+  vec3 k = v - c * a;
+  float sinDelta = length(k);
+  bool inside = d <= radius;
+  float sinAlpha = min(radius / d, 1.0);
+  float cosAlpha = sqrt(max(1.0 - sinAlpha * sinAlpha, 0.0));
+  float tanAlpha = sinAlpha / max(cosAlpha, 1e-7);
+#endif
+  float edge = sinAlpha - sinDelta;
+  float edgeWidth = max(fwidth(sinDelta), 1e-7);
+  float front = c > 0.0 ? 1.0 : 0.0;
+  float exterior = clamp(edge / edgeWidth + 0.5, 0.0, 1.0) * front;
+  float coverage = inside ? 1.0 : exterior;
+  float pixelStep = max(length(vec2(dFdx(sinDelta), dFdy(sinDelta))), 1e-9);
+  float ringOuter = clamp(edge / pixelStep + outlineWidth + 0.5, 0.0, 1.0) * front;
+  float ring = (inside ? 0.0 : max(ringOuter - exterior, 0.0)) * outlineColor.a;
+
+#ifdef PANORAMA_LEAN
+  // Only its direction is sampled: the equirectangular lookup normalizes it once, a cube needs no length.
+  vec3 worldDirection = identityWindow > 0.5 ? v : a + k * (windowGain / max(c, 1e-4));
+#else
+  float gain = tanPreviewHalfAngle / max(tanAlpha, 1e-7);
+  vec3 windowed = normalize(a + k * (gain / max(c, 1e-4)));
+  vec3 worldDirection = (inside || tanAlpha >= tanPreviewHalfAngle) ? v : windowed;
+#endif
+  vec3 imageDirection = panoramaImageDirection(worldDirection);
+#ifdef SOURCE_EQUIRECT
+  vec4 sampled = panoramaSeamlessSample(panoramaEquirect, panoramaEquirectUv(imageDirection));
+#else
+  vec4 sampled = textureCube(panoramaCube, panoramaCubeVector(imageDirection));
+#endif
+#ifdef SOURCE_TILES
+  sampled.rgb = panoramaTiles(tileAtlas, tileTable, sampled.rgb, imageDirection, tileLayout, tileAtlasInfo);
+#endif
+
+  float b = c * d;
+  float root = sqrt(max(radius * radius - d * d + b * b, 0.0));
+  float t = inside ? b + root : b - root;
+  vec4 clip = viewRotProj * vec4(v * max(t, 0.0), 1.0);
+#ifdef OUTPUT_DIRECTION
+  if (coverage <= 0.0) discard;
+#ifdef PANORAMA_LEAN
+  gl_FragColor = vec4(normalize(imageDirection), coverage);
+#else
+  gl_FragColor = vec4(imageDirection, coverage);
+#endif
+#else
+#ifdef OUTPUT_RAY
+  if (coverage <= 0.0) discard;
+  gl_FragColor = vec4(v, coverage);
+#else
+  float shown = coverage + ring;
+  if (shown <= 0.0) discard;
+  vec3 rgb = (sampled.rgb * coverage + outlineColor.rgb * ring) / shown;
+  gl_FragColor = vec4(rgb, shown * opacity);
+#endif
+#endif
+  // WebGL's projection maps depth to [-1, 1], unlike WebGPU's [0, 1].
+  gl_FragDepthEXT = clamp(0.5 * (clip.z / clip.w) + 0.5, 0.0, 1.0);
+}
+`;
+
+export const IMMERSION_VERTEX_GLSL = /* glsl */ `
+precision highp float;
+attribute vec3 position;
+uniform mat4 inverseViewRotProj;
+#ifdef PANORAMA_LEAN
+// The view ray in each image's frame, divided by its w on the CPU: w is the
+// same at every corner, so the rotation is linear across the triangle.
+uniform mat4 imageFromClip;
+uniform mat4 nextImageFromClip;
+varying vec3 vImage;
+varying vec3 vNextImage;
+#ifdef OUTPUT_RAY
+varying vec4 vRay;
+#endif
+#else
+varying vec4 vRay;
+#endif
+void main(void) {
+  vec4 clip = vec4(position.xy, 0.5, 1.0);
+#ifdef PANORAMA_LEAN
+  vImage = (imageFromClip * clip).xyz;
+  vNextImage = (nextImageFromClip * clip).xyz;
+#ifdef OUTPUT_RAY
+  vRay = inverseViewRotProj * clip;
+#endif
+#else
+  vRay = inverseViewRotProj * clip;
+#endif
+  gl_Position = clip;
+}
+`;
+
+export const IMMERSION_FRAGMENT_GLSL = /* glsl */ `
+${EXTENSIONS}
+uniform float opacity;
+uniform float mixWeight;
+${CONTENT_UNIFORMS}
+uniform vec3 nextContent0;
+uniform vec3 nextContent1;
+uniform vec3 nextContent2;
+#ifdef SOURCE_EQUIRECT
+uniform sampler2D panoramaEquirect;
+#else
+uniform samplerCube panoramaCube;
+#endif
+#ifdef NEXT_EQUIRECT
+uniform sampler2D nextEquirect;
+#endif
+#ifdef NEXT_CUBE
+uniform samplerCube nextCube;
+#endif
+#ifdef SOURCE_TILES
+uniform sampler2D tileAtlas;
+uniform sampler2D tileTable;
+uniform vec4 tileLayout;
+uniform vec4 tileAtlasInfo;
+#endif
+#ifdef NEXT_TILES
+uniform sampler2D nextTileAtlas;
+uniform sampler2D nextTileTable;
+uniform vec4 nextTileLayout;
+uniform vec4 nextTileAtlasInfo;
+#endif
+#ifdef PANORAMA_LEAN
+varying vec3 vImage;
+#ifdef NEXT_EQUIRECT
+varying vec3 vNextImage;
+#endif
+#ifdef NEXT_CUBE
+varying vec3 vNextImage;
+#endif
+#ifdef OUTPUT_RAY
+varying vec4 vRay;
+#endif
+#else
+varying vec4 vRay;
+#endif
+${COMMON}
+
+void main(void) {
+#ifdef PANORAMA_LEAN
+#ifdef SOURCE_EQUIRECT
+  vec3 imageDirection = normalize(vImage);
+  vec3 color = panoramaSeamlessSample(panoramaEquirect, panoramaEquirectUvUnit(imageDirection)).rgb;
+#else
+  vec3 imageDirection = vImage;
+  vec3 color = textureCube(panoramaCube, panoramaCubeVector(imageDirection)).rgb;
+#endif
+#ifdef NEXT_EQUIRECT
+  vec3 nextImage = normalize(vNextImage);
+#endif
+#ifdef NEXT_CUBE
+  vec3 nextImage = vNextImage;
+#endif
+#else
+  vec3 v = normalize(vRay.xyz / vRay.w);
+  vec3 imageDirection = panoramaImageDirection(v);
+#ifdef SOURCE_EQUIRECT
+  vec3 color = panoramaSeamlessSample(panoramaEquirect, panoramaEquirectUv(imageDirection)).rgb;
+#else
+  vec3 color = textureCube(panoramaCube, panoramaCubeVector(imageDirection)).rgb;
+#endif
+  vec3 nextImage = vec3(dot(nextContent0, v), dot(nextContent1, v), dot(nextContent2, v));
+#endif
+#ifdef SOURCE_TILES
+  color = panoramaTiles(tileAtlas, tileTable, color, imageDirection, tileLayout, tileAtlasInfo);
+#endif
+#ifdef NEXT_EQUIRECT
+#ifdef PANORAMA_LEAN
+  color = panoramaSrgbEncode(mix(panoramaSrgbDecode(color), panoramaSrgbDecode(panoramaSeamlessSample(nextEquirect, panoramaEquirectUvUnit(nextImage)).rgb), mixWeight));
+#else
+  color = panoramaSrgbEncode(mix(panoramaSrgbDecode(color), panoramaSrgbDecode(panoramaSeamlessSample(nextEquirect, panoramaEquirectUv(nextImage)).rgb), mixWeight));
+#endif
+#endif
+#ifdef NEXT_CUBE
+  vec3 nextColor = textureCube(nextCube, panoramaCubeVector(nextImage)).rgb;
+#ifdef NEXT_TILES
+  nextColor = panoramaTiles(nextTileAtlas, nextTileTable, nextColor, nextImage, nextTileLayout, nextTileAtlasInfo);
+#endif
+  color = panoramaSrgbEncode(mix(panoramaSrgbDecode(color), panoramaSrgbDecode(nextColor), mixWeight));
+#endif
+#ifdef OUTPUT_DIRECTION
+#ifdef PANORAMA_LEAN
+  gl_FragColor = vec4(normalize(imageDirection), 1.0);
+#else
+  gl_FragColor = vec4(imageDirection, 1.0);
+#endif
+#else
+#ifdef OUTPUT_RAY
+#ifdef PANORAMA_LEAN
+  gl_FragColor = vec4(normalize(vRay.xyz / vRay.w), 1.0);
+#else
+  gl_FragColor = vec4(v, 1.0);
+#endif
+#else
+  // The steady view has no crossfade: avoid decoding and encoding every
+  // pixel when the encoded sample is already the desired display color.
+  gl_FragColor = vec4(color, opacity);
+#endif
+#endif
+}
+`;
+
+/** The orb's per-draw constants under PANORAMA_LEAN, set by the renderer from its float64 geometry. */
+export const ORB_LEAN_UNIFORMS = ["sinAlpha", "windowGain", "identityWindow"] as const;
+/** Immersion's view-to-image matrices under PANORAMA_LEAN. */
+export const IMMERSION_LEAN_UNIFORMS = ["imageFromClip", "nextImageFromClip"] as const;

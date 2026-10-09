@@ -1,0 +1,134 @@
+{
+  "name": "@foss-earth/360",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/foss-earth/360.git"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./babylon": {
+      "types": "./dist/renderer.d.ts",
+      "import": "./dist/renderer.js"
+    },
+    "./shaders": {
+      "types": "./dist/shaders.d.ts",
+      "import": "./dist/shaders.js"
+    },
+    "./shaders-webgl": {
+      "types": "./dist/shadersWebGl.d.ts",
+      "import": "./dist/shadersWebGl.js"
+    },
+    "./input": {
+      "types": "./dist/browserInput.d.ts",
+      "import": "./dist/browserInput.js"
+    },
+    "./viewer": {
+      "types": "./dist/viewer.d.ts",
+      "import": "./dist/viewer.js"
+    },
+    "./settings": {
+      "types": "./dist/settings.d.ts",
+      "import": "./dist/settings.js"
+    },
+    "./preparation": {
+      "types": "./node/preparation.d.mts",
+      "import": "./node/preparation.mjs"
+    },
+    "./prepare-cli": "./node/prepare-cli.mjs",
+    "./resources": {
+      "types": "./dist/resources.d.ts",
+      "import": "./dist/resources.js"
+    },
+    "./panels": {
+      "types": "./dist/panels.d.ts",
+      "import": "./dist/panels.js"
+    },
+    "./node": {
+      "types": "./node/preparation.d.mts",
+      "import": "./node/preparation.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "schema",
+    "LICENSE",
+    "PROVENANCE.json",
+    "README.md",
+    "NOTICE",
+    "SOURCE_LINEAGE.json",
+    "node",
+    "AGENTS.md",
+    "CODE_OF_CONDUCT.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "SOURCE_RECEIPT.json"
+  ],
+  "dependencies": {
+    "@foss-earth/images": "0.1.0",
+    "@foss-earth/cubemap": "0.1.0",
+    "@foss-earth/equirectangular": "0.1.0",
+    "@foss-earth/tiled-cubemap": "0.1.0",
+    "@foss-earth/preview-sheets": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.4",
+    "typescript": "5.9.3",
+    "vitest": "4.1.6",
+    "eslint": "9.39.4",
+    "typescript-eslint": "8.59.3",
+    "@babylonjs/core": "8.56.2",
+    "jsdom": "29.1.1",
+    "@foss-earth/engine": "0.1.0",
+    "@foss-earth/ui": "0.1.0",
+    "@felipegalind0/gamepad-tools": "0.1.0",
+    "@eslint/js": "9.39.4",
+    "globals": "17.6.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit --tsBuildInfoFile node_modules/.tmp/typecheck.tsbuildinfo",
+    "lint": "eslint . --cache --cache-strategy content --cache-location node_modules/.cache/eslint/",
+    "test": "vitest run --maxWorkers=50%",
+    "ci": "npm run check:conformance && npm run check:implementation",
+    "typecheck:consumer": "tsc -p fixtures/tsconfig.json",
+    "test:consumer": "node scripts/check-public-consumer.mjs",
+    "check:implementation": "npm run typecheck && npm run lint && npm run build && npm test && npm run typecheck:consumer",
+    "check:conformance": "node node_modules/@foss-earth/ci/bin/conformance.mjs --consumer . --trusted-release .attribution-release.json --output-root build/common-conformance",
+    "check:attribution": "node node_modules/@foss-earth/ci/bin/attribution.mjs --repo . --refs-file build/repository-split/intended-publication-refs.json"
+  },
+  "peerDependencies": {
+    "@foss-earth/renderer": "0.1.0",
+    "@foss-earth/ui": "0.1.0",
+    "@babylonjs/core": "8.56.2",
+    "@felipegalind0/gamepad-tools": "0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@foss-earth/renderer": {
+      "optional": true
+    },
+    "@foss-earth/ui": {
+      "optional": true
+    },
+    "@babylonjs/core": {
+      "optional": true
+    },
+    "@felipegalind0/gamepad-tools": {
+      "optional": true
+    }
+  },
+  "description": "Image viewer composition and camera handover through explicit host ports",
+  "bin": {
+    "foss-earth-prepare-panorama": "./node/prepare-cli.mjs"
+  }
+}

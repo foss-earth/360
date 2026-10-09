@@ -1,0 +1,173 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ViewerSource } from "../src/viewer.js";
+import { deferred, fixture, flush, image, representation, source } from "./fixtures/viewer.js";
+
+describe("injected viewer lifecycle", () => {
+  it("reports only published current sources and retains the successful preview limitation", async () => {
+    const f=fixture(),input=image(),controller=new AbortController();
+    f.options.resources.preview=()=>({representation:input.asset.representations[0],limitation:"original preview limit"});
+    const handle=await f.viewer.prepare(input,controller.signal);await handle.ready();
+    expect(f.viewer.isPlacementFrozen("a")).toBe(false);
+    expect(f.viewer.currentSources("a")).toEqual({preview:null,shown:null});
+    expect(f.viewer.describeResources("a")).toEqual({previewDetail:null});
+    f.viewer.replaceImages([handle]);
+    expect(f.viewer.currentSources("a")).toEqual({preview:"preview-64",shown:null});
+    expect(f.viewer.describeResources("a")).toEqual({previewDetail:{representation:"preview-64",faceTexels:64,limitation:"original preview limit"}});
+    f.options.resources.preview=()=>({representation:input.asset.representations[0],limitation:"a later policy observation"});
+    expect(f.viewer.describeResources("a").previewDetail?.limitation).toBe("original preview limit");
+    expect(await f.viewer.enter("a")).toBe(true);
+    expect(f.viewer.isPlacementFrozen("a")).toBe(true);
+    expect(f.viewer.currentSources("a")).toEqual({preview:"preview-64",shown:"preview-64"});
+    f.viewer.exit();await flush();expect(f.viewer.currentSources("a")).toEqual({preview:"preview-64",shown:null});expect(f.viewer.isPlacementFrozen("a")).toBe(false);
+    controller.abort();expect(f.viewer.currentSources("a")).toEqual({preview:null,shown:null});expect(f.viewer.describeResources("a")).toEqual({previewDetail:null});
+    f.viewer.dispose();expect(f.viewer.currentSources("missing")).toEqual({preview:null,shown:null});expect(f.viewer.isPlacementFrozen("missing")).toBe(false);
+  });
+  it("does not report a cancelled late preview or an invalidated held source", async () => {
+    const f=fixture(),pending=deferred<ViewerSource>(),controller=new AbortController();f.acquire.mockImplementationOnce(()=>pending.promise);
+    const handle=await f.viewer.prepare(image(),controller.signal);f.viewer.replaceImages([handle]);
+    const ready=handle.ready(),failure=expect(ready).rejects.toThrow();await flush();
+    expect(f.viewer.currentSources("a")).toEqual({preview:null,shown:null});controller.abort();
+    const late=source();pending.resolve(late);await failure;await flush();
+    expect(late.release).toHaveBeenCalledTimes(1);expect(f.viewer.currentSources("a")).toEqual({preview:null,shown:null});expect(f.viewer.describeResources("a")).toEqual({previewDetail:null});
+    const fresh=await f.viewer.prepare(image("b"),new AbortController().signal);await fresh.ready();f.viewer.replaceImages([fresh]);
+    const held=await f.acquire.mock.results.at(-1)!.value;
+    expect(f.viewer.currentSources("b").preview).toBe("preview-64");Object.assign(held,{isCurrent:()=>false});
+    expect(f.viewer.currentSources("b")).toEqual({preview:null,shown:null});expect(f.viewer.describeResources("b")).toEqual({previewDetail:null});f.viewer.dispose();
+  });
+  it("keeps private incoming and borrowed fallback metadata out of published residency", async () => {
+    const f=fixture(),handle=await f.viewer.prepare(image(),new AbortController().signal);await handle.ready();f.viewer.replaceImages([handle]);
+    const whole=source("whole");f.immersion.mockReturnValueOnce({representation:whole.representation,limitation:null});f.acquire.mockResolvedValueOnce(whole);
+    expect(await f.viewer.enter("a")).toBe(true);await flush();expect(f.viewer.currentSources("a").shown).toBe("whole");
+    const pending=deferred<ViewerSource>(),incoming=source("tiles");let covered=false;
+    Object.assign(incoming,{source:{texture:{label:"private-borrowed-cube"},kind:"tiles"},viewReady:()=>covered,detail:()=>({representation:"private-borrowed-cube"})});
+    f.immersion.mockReturnValueOnce({representation:incoming.representation,limitation:null});f.acquire.mockImplementationOnce(()=>pending.promise);
+    await f.advance(0);pending.resolve(incoming);await flush();
+    expect(f.viewer.currentSources("a")).toEqual({preview:"preview-64",shown:"whole"});
+    expect(f.viewer.describeResources("a").previewDetail?.representation).toBe("preview-64");
+    covered=true;await f.advance(0);
+    expect(f.viewer.currentSources("a")).toEqual({preview:"preview-64",shown:"tiles"});
+    expect(f.viewer.currentSources("private-borrowed-cube")).toEqual({preview:null,shown:null});
+    f.viewer.dispose();expect(f.viewer.currentSources("a")).toEqual({preview:null,shown:null});expect(f.holds.active).toBe(0);
+  });
+  it("prepares hidden immutable metadata, then publishes without sharing authored draw IDs", async () => {
+    const f = fixture(), controller = new AbortController(), input = image();
+    const first = await f.viewer.prepare(input, controller.signal);
+    input.id = "mutated"; input.title = "mutated"; input.placement.radiusMeters = 99;
+    await first.ready(); f.viewer.replaceImages([first]);
+    expect(first.id).toBe("a"); expect(f.orbs[0].state.radiusMeters).toBe(1);
+    const second = await f.viewer.prepare(image(), controller.signal); await second.ready();
+    expect(f.orbs[0].id).not.toBe(f.orbs[1].id); expect(f.orbs[1].state.visible).toBe(false);
+    f.viewer.replaceImages([second]); expect(f.orbs[0].state.visible).toBe(false); expect(f.orbs[1].state.visible).toBe(true);
+    first.dispose(); second.dispose(); f.viewer.dispose();
+  });
+  it("validates the whole next set before changing visible metadata", async () => {
+    const f = fixture(), first = await f.viewer.prepare(image(), new AbortController().signal);
+    await first.ready(); f.viewer.replaceImages([first]);
+    expect(() => f.viewer.replaceImages([first, first])).toThrow(/duplicate/);
+    expect(f.orbs[0].state.visible).toBe(true); f.viewer.dispose();
+  });
+  it("rejects ready after cancellation and disposes an uncooperative late loader", async () => {
+    const f = fixture(), result = deferred<ViewerSource>(), controller = new AbortController(); f.acquire.mockImplementationOnce(() => result.promise);
+    const handle = await f.viewer.prepare(image(), controller.signal), ready = handle.ready();
+    const failure = expect(ready).rejects.toThrow(); await flush(); controller.abort();
+    const late = source(); result.resolve(late); await failure;
+    expect(late.release).toHaveBeenCalledTimes(1); expect(f.orbs[0].dispose).toHaveBeenCalledTimes(1); f.viewer.dispose();
+  });
+  it("removes the host abort listener and detaches input exactly once", async () => {
+    const f = fixture(), controller = new AbortController(), remove = vi.spyOn(controller.signal, "removeEventListener");
+    const handle = await f.viewer.prepare(image(), controller.signal); await handle.ready(); f.viewer.replaceImages([handle]);
+    expect(await f.viewer.enter("a")).toBe(true); f.viewer.exit(); await flush(); handle.dispose(); f.viewer.dispose();
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function)); expect(f.detach).toHaveBeenCalledTimes(1); expect(f.holds.active).toBe(0);
+  });
+  it("keeps idle frames idle and publishes appearance only when it changes", async () => {
+    const f = fixture(); await f.advance(0); const count = f.render.mock.calls.length;
+    for (let n=0; n<3; n++) expect(f.viewer.onFrame({ now: n, dtMs: 0 })).toBe(false);
+    expect(f.render).toHaveBeenCalledTimes(count); f.settings.appearance.previewFovDeg = 100; await f.advance(1);
+    expect(f.render).toHaveBeenCalledTimes(count+1); f.viewer.dispose();
+  });
+  it("a late cancelled refinement cannot overwrite the target image or double-release its preview", async () => {
+    const f = fixture(), pending = deferred<ViewerSource>();
+    const a = await f.viewer.prepare(image("a"), new AbortController().signal), b = await f.viewer.prepare(image("b"), new AbortController().signal);
+    await a.ready(); await b.ready(); f.viewer.replaceImages([a,b]);
+    const previewA = await f.acquire.mock.results[0].value;
+    f.immersion.mockReturnValueOnce({ representation: representation("detail"), limitation: null }); f.acquire.mockImplementationOnce(() => pending.promise);
+    expect(await f.viewer.enter("a")).toBe(true); await flush();
+    expect(await f.viewer.enter("b")).toBe(true); const late = source("detail"); pending.resolve(late); await flush();
+    expect(f.viewer.status().active).toBe("b"); expect(late.release).toHaveBeenCalledTimes(1); expect(previewA.release).not.toHaveBeenCalled(); f.viewer.dispose();
+  });
+  it("settles a refinement fade before capturing the next outgoing source", async () => {
+    const f = fixture(), incoming = source("detail");
+    const a = await f.viewer.prepare(image("a"), new AbortController().signal), b = await f.viewer.prepare(image("b"), new AbortController().signal);
+    await a.ready(); await b.ready(); f.viewer.replaceImages([a,b]);
+    expect(await f.viewer.enter("a")).toBe(true); f.settings.fadeDurationMs = 100;
+    f.immersion.mockReturnValueOnce({ representation: representation("detail"), limitation: null }); f.acquire.mockResolvedValueOnce(incoming);
+    await f.advance(0); const navigation = f.viewer.enter("b"); await flush(); await f.advance(100);
+    expect(await navigation).toBe(true); expect(incoming.release).toHaveBeenCalledTimes(1); expect(f.viewer.status().active).toBe("b");
+    f.viewer.dispose(); expect(f.holds.active).toBe(0);
+  });
+  it("an older navigation catch cannot publish over a newer target", async () => {
+    const f = fixture(), pending = deferred<ViewerSource>();
+    const handles = await Promise.all(["a","b","c"].map(id => f.viewer.prepare(image(id), new AbortController().signal)));
+    await handles[0].ready(); await handles[2].ready(); f.viewer.replaceImages([handles[0],handles[2]]); expect(await f.viewer.enter("a")).toBe(true);
+    f.acquire.mockImplementationOnce(() => pending.promise); f.viewer.replaceImages(handles); await flush();
+    const old = f.viewer.enter("b"), newer = f.viewer.enter("c"); expect(await newer).toBe(true);
+    pending.resolve(source()); expect(await old).toBe(false); expect(f.viewer.status().active).toBe("c"); f.viewer.dispose();
+  });
+  it("calls only the host's explicitly requested action", async () => {
+    const f = fixture(), input = image(), go = vi.fn(() => true); input.actions = [{ id: "next", label: "Next", activate: go }];
+    const handle = await f.viewer.prepare(input, new AbortController().signal); await handle.ready(); f.viewer.replaceImages([handle]);
+    expect(go).not.toHaveBeenCalled(); expect(await f.viewer.activateAction("next")).toBe(false); await f.viewer.enter("a");
+    expect(await f.viewer.activateAction("next")).toBe(true); expect(go).toHaveBeenCalledTimes(1); f.viewer.dispose();
+  });
+  it("host navigation revocation leaves the host's next presentation intact", async () => {
+    const f = fixture(), handle = await f.viewer.prepare(image(), new AbortController().signal);
+    await handle.ready(); f.viewer.replaceImages([handle]); await f.viewer.enter("a");
+    f.abort.abort(); expect(f.options.navigation.restore).not.toHaveBeenCalled(); expect(f.viewer.status().phase).toBe("overview"); f.viewer.dispose();
+  });
+  it("an interrupted flight keeps momentum and settles the sharper borrowed preview after the outro", async () => {
+    const f=fixture(),input=image(),pending=deferred<ViewerSource>();input.placement.marker=[6378147,0,0];
+    const handle=await f.viewer.prepare(input,new AbortController().signal);await handle.ready();f.viewer.replaceImages([handle]);
+    const original=await f.acquire.mock.results[0].value,sharper=source("preview-256");
+    f.preview.mockReturnValue({representation:sharper.representation,limitation:null});f.acquire.mockImplementationOnce(()=>pending.promise);
+    expect(await f.viewer.enter("a")).toBe(true);pending.resolve(sharper);await flush();expect(sharper.settleReplacement).not.toHaveBeenCalled();
+    f.settings.flightDurationMs=1000;
+    f.options.renderer.cameraFrame=()=>({eye:[6378147,-100,0],view:{forward:[0,1,0],right:[0,0,-1],up:[1,0,0],verticalFovRad:Math.PI/3,aspect:1.6},viewportHeightCssPx:900,revision:"fixture",viewRotProj:{} as never,inverseViewRotProj:{} as never});
+    f.viewer.exit();await flush();await f.advance(200);f.cancelControllers.at(-1)!.abort(new Error("fresh host input"));await flush();
+    expect(f.options.navigation.glide).toHaveBeenCalledTimes(1);const motion=vi.mocked(f.options.navigation.glide).mock.calls[0][3];expect(motion.velocity.some(value=>Math.abs(value)>0)).toBe(true);
+    expect(original.release).not.toHaveBeenCalled();expect(sharper.settleReplacement).not.toHaveBeenCalled();await f.advance(1000);
+    expect(original.release).toHaveBeenCalledTimes(1);expect(sharper.settleReplacement).toHaveBeenCalledTimes(1);f.viewer.dispose();expect(f.holds.active).toBe(0);
+  });
+  it("re-resolves an image after waiting for exit instead of entering removed metadata",async()=>{
+    const f=fixture(),handle=await f.viewer.prepare(image(),new AbortController().signal);await handle.ready();f.viewer.replaceImages([handle]);await f.viewer.enter("a");
+    f.settings.fadeDurationMs=100;f.viewer.exit();await flush();const entering=f.viewer.enter("a");f.viewer.replaceImages([]);await flush();
+    expect(await entering).toBe(false);expect(f.viewer.status().active).toBeNull();expect(f.orbs[0].expansion).toBeNull();f.viewer.dispose();
+  });
+  it("awaits a current replacement after generation loss even when its authored representation ID is unchanged", async () => {
+    const f = fixture(), handle = await f.viewer.prepare(image(), new AbortController().signal);
+    await handle.ready(); f.viewer.replaceImages([handle]);
+    const old = await f.acquire.mock.results[0].value, pending = deferred<ViewerSource>();
+    Object.assign(old, { key: "asset@v1/preview-64/generation-0", isCurrent: () => false });
+    f.preview.mockReturnValue({ representation: old.representation, limitation: null, key: "asset@v1/preview-64/generation-1" } as never);
+    f.acquire.mockImplementationOnce(() => pending.promise);
+    const entering = f.viewer.enter("a"); await flush();
+    expect(f.viewer.status().phase).toBe("preparing"); expect(f.options.navigation.place).not.toHaveBeenCalled();
+    expect(old.release).toHaveBeenCalledTimes(1); expect(f.orbs[0].state.texture).toBeNull();
+    const fresh = source(); Object.assign(fresh, { key: "asset@v1/preview-64/generation-1", isCurrent: () => true }); pending.resolve(fresh);
+    expect(await entering).toBe(true); expect(f.viewer.status().active).toBe("a"); f.viewer.dispose();
+    expect(fresh.release).toHaveBeenCalledTimes(1);
+  });
+  it("keeps incoming tiles on the host frame during a fade and rechecks coverage before replacing a sharper whole image", async () => {
+    const f = fixture(), handle = await f.viewer.prepare(image(), new AbortController().signal);
+    await handle.ready(); f.viewer.replaceImages([handle]);
+    const whole = source("whole"); f.immersion.mockReturnValueOnce({ representation: whole.representation, limitation: null }); f.acquire.mockResolvedValueOnce(whole);
+    expect(await f.viewer.enter("a")).toBe(true); await flush(); expect(f.viewer.status().immersionDetail?.representation).toBe("whole");
+    let covered = true;
+    const tiles = source("tiles"), tick = vi.fn(() => false); Object.assign(tiles, { source: { kind: "tiles" }, onFrame: tick, viewReady: () => covered });
+    f.settings.fadeDurationMs = 100; f.immersion.mockReturnValueOnce({ representation: tiles.representation, limitation: null }); f.acquire.mockResolvedValueOnce(tiles);
+    await f.advance(0); const started = tick.mock.calls.length; await f.advance(25); expect(tick.mock.calls.length).toBeGreaterThan(started);
+    covered = false; await f.advance(100); expect(f.viewer.status().immersionDetail?.representation).toBe("whole"); expect(whole.release).not.toHaveBeenCalled();
+    const fading = tick.mock.calls.length; await f.advance(5); expect(tick.mock.calls.length).toBeGreaterThan(fading);
+    covered = true; await f.advance(5); expect(f.viewer.status().immersionDetail?.representation).toBe("tiles"); expect(whole.release).toHaveBeenCalledTimes(1);
+    expect(tiles.settleReplacement).toHaveBeenCalledTimes(1); f.viewer.dispose(); expect(f.holds.active).toBe(0);
+  });
+});

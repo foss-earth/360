@@ -1,0 +1,1169 @@
+{
+  "schemaVersion": 1,
+  "package": "@foss-earth/360",
+  "sourceRepository": "https://github.com/foss-earth/foss-earth.github.io.git",
+  "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d",
+  "license": "AGPL-3.0-only",
+  "publication": "SOURCE ONLY; pending clean filtered lineage/shared caller and conformance/rights/acceptance/installed checks/consumer adoption",
+  "sourceMaps": [
+    {
+      "path": "LICENSE",
+      "gitBlob": "be3f7b28e564e7dd05eaf59d64adba1a4065ac0e",
+      "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+      "destinations": [
+        {
+          "path": "LICENSE",
+          "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+        }
+      ],
+      "transformation": "Exact original license."
+    },
+    {
+      "path": "NOTICE",
+      "gitBlob": "cd6a1d92cce505eaeea37e9726a2f98a0a61a12d",
+      "sha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993",
+      "destinations": [
+        {
+          "path": "NOTICE",
+          "sha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993"
+        }
+      ],
+      "transformation": "Exact original human notice."
+    },
+    {
+      "path": "src/scenes/panoramaMath.ts",
+      "gitBlob": "c4193c7932266639ec58e72000a2edb38f22c705",
+      "sha256": "071a5fbcb150ace6d3f26fd7164ed06924ad5b4c0b5ce5c8b8ea854593660e68",
+      "destinations": [
+        {
+          "path": "src/math.ts",
+          "sha256": "6a652d6410da5cc2182d4789b36c3779c812517b2c36133e20a323971b1d4d6c"
+        }
+      ],
+      "transformation": "Retain orb/window/ray geometry; shared vector and representation/geographic functions are consumed through their public owners."
+    },
+    {
+      "path": "src/scenes/panoramaMath.test.ts",
+      "gitBlob": "28f90a9de6bfd92829a1ed60d26fe161ba6c2ca3",
+      "sha256": "6adf79d0197516faa391c42251b8df6a9df4973a62cbb690e486f01c0d5d828a",
+      "destinations": [
+        {
+          "path": "tests/math.test.ts",
+          "sha256": "42884e80e5ccfb98767032deb21e741120f26d069b5fd90783b8c143b4007d19"
+        }
+      ],
+      "transformation": "Retain six flat-window cases, handoff expansion and projected-diameter inverse; representation/geographic groups belong to their public owners."
+    },
+    {
+      "path": "src/scenes/panoramaFlight.ts",
+      "gitBlob": "80aacfcca4bd465aa9673b3b7f2cb6cdef9a8b63",
+      "sha256": "17cb3b296c8ed4611abe12d94efa7045e0d8ca5f3f1c648ba1eca549b865dd74",
+      "destinations": [
+        {
+          "path": "src/flight.ts",
+          "sha256": "83a30390fd135e3e70958335f53a6481b44e679b7afadbb4cd76529a57f1344d"
+        }
+      ],
+      "transformation": "Retain entry/exit/motion sampling with structural injected ViewerWorldMath; no production engine import or duplicated orbit/geography/decay."
+    },
+    {
+      "path": "src/scenes/panoramaFlight.test.ts",
+      "gitBlob": "db9dbf002063070f0d7fb41a56da0fffe87f04c4",
+      "sha256": "8ea8da6fa6289d085d641b37c8b116c0da35c392001dc536c02893e9cc94f0dc",
+      "destinations": [
+        {
+          "path": "tests/flight.test.ts",
+          "sha256": "a18c5ad65dd8349323f44e2442b3f5f58df3eeccccb4e06a1300c6fe8d4fa2a7"
+        },
+        {
+          "path": "tests/fixtures/world.ts",
+          "sha256": "891bbcae1c152888c5c53fd24adeb6d4508b051f24aadb2aa6ad4a9a93740df2"
+        }
+      ],
+      "transformation": "Retain four entry/four exit/interruption motion cases using an explicit public engine composition fixture; engine-owned orbit/decay cases are excluded."
+    },
+    {
+      "path": "src/scenes/panoramaInput.ts",
+      "gitBlob": "157b99f80b48ecacf845b52dad5dce8c4771fd0c",
+      "sha256": "d00036cf234a016eeeea7be60eb51b094aed4c31a3d3ebb8527715fad9b731cc",
+      "destinations": [
+        {
+          "path": "src/look.ts",
+          "sha256": "605665b6416fba2637662a07501c6893a0a1c1a68e5ab2e06dafea1c0c5b9fef"
+        },
+        {
+          "path": "src/browserInput.ts",
+          "sha256": "d89028835df8a4372936fde2f5b4a45f5f4ba2cdd041ced7bd500285fc36d331"
+        }
+      ],
+      "transformation": "Retain pure look model and optional input binding; document/window/control ownership/controller frames supplied by host, disposal prevents late intent actions."
+    },
+    {
+      "path": "src/scenes/panoramaInput.test.ts",
+      "gitBlob": "702598903f4d228c97d0cbf8ec0b5bf7a97c4a8c",
+      "sha256": "c7efb21680b731b86e65172e8afc178c223c3292a5ea19ede5b2b17ccbd6020c",
+      "destinations": [
+        {
+          "path": "tests/look.test.ts",
+          "sha256": "a44a02ebcdf3f577847b814a875988b2c9f2e41afc581d27508ec9f81ebe634a"
+        },
+        {
+          "path": "tests/browserInput.test.ts",
+          "sha256": "0560f59d564510ba6274c4777caad4bceb5361b40850a7dfc4538b09656b7a46"
+        }
+      ],
+      "transformation": "Retain look and Escape/typing/controller/slider/trackpad/mouse input cases; add causal late intent and pointer cleanup coverage."
+    },
+    {
+      "path": "src/scenes/sceneView.ts",
+      "gitBlob": "fb884af09a27c0695b8b38676aff105c8491b46d",
+      "sha256": "301f9ba2db26bd0c8ac3fdc39cea7fc3e6a8cbe1d9a95a4491ff07ac5ed85a83",
+      "destinations": [
+        {
+          "path": "src/views.ts",
+          "sha256": "0323c9881834f9b6c3c9c2f306a77a489e082e523a552f13897d562ae23f4237"
+        }
+      ],
+      "transformation": "Retain shortest-heading interpolation only; geographic presentation/overview functions belong to engine/scenes host composition."
+    },
+    {
+      "path": "src/scenes/sceneView.test.ts",
+      "gitBlob": "e7d85604f001674b09f0d4ead0d0f2997b1a4a8c",
+      "sha256": "8a2a625da6ef6dd1c57bfa1750d09373573bf832f6ba2870f4c0ac994b133c74",
+      "destinations": [
+        {
+          "path": "tests/views.test.ts",
+          "sha256": "6df170eb48b818aab412e08c66f4e2d866ccdeab3c421006d2e2846b664b8d60"
+        }
+      ],
+      "transformation": "Retain shortest-heading interpolation case only."
+    },
+    {
+      "path": "src/scenes/budget.ts",
+      "gitBlob": "e90822ddd01fcc6b7ed137d98960e61d600400f2",
+      "sha256": "bad5aa6efb442860c9f482d52464ef71cb03fd6710457774e041df46e38898fc",
+      "destinations": [
+        {
+          "path": "src/selection.ts",
+          "sha256": "698317e547ee94266d4c7616433aa53d7189fba15e07944ce39bc0af70facadb"
+        }
+      ],
+      "transformation": "Retain choice ordering/refusal/detail/preference policy through representation-owned cost/density hooks; no copied formats or common broker/cache implementation. Optional warm selector delegates to the exact existing immersion chooser and accepts only tiled output; same current representation preference/admission/density policy, no duplicated leaf algorithm."
+    },
+    {
+      "path": "src/scenes/loadScene.ts",
+      "gitBlob": "7d5545e0945f42a4b1999db4c8f78b608ada7ce0",
+      "sha256": "0e326ec830c0056684cbc82884a520592859a0152a70c02dab5265498b0e3b51",
+      "destinations": [
+        {
+          "path": "src/viewer.ts",
+          "sha256": "481a8c5163c12abc18753c1e08843d92849e914509ffd93dcb9fc3a2863194d6"
+        },
+        {
+          "path": "src/resources.ts",
+          "sha256": "bb3590866bcac38a215d9aaedb747361e524b71781791ce82676cfad94ad985e"
+        },
+        {
+          "path": "src/ports.ts",
+          "sha256": "39555612d4b89ef8e336ba8d9a6e895d8dc54f87278808180e960dc419e5bb33"
+        },
+        {
+          "path": "tests/fixtures/viewer.ts",
+          "sha256": "de17e4bb066a64667b2e8784140dc0fee8108ca035e8150c6fe67dfed7200cff"
+        },
+        {
+          "path": "tests/viewer.test.ts",
+          "sha256": "36098b692b18e1686c55afe801c18e36c8749ce7aeead6277cd1f70170d93f60"
+        }
+      ],
+      "transformation": "Extract image lifecycle, orb/immersion transition, and actual public leaf-resource composition. Scene envelope, placement, entity resolution, history, geography and shared resources remain owners. Add cancellation/generation/refinement/overlap repairs and injected causal fixtures. Required per-source tile policy repair: tiles.selection receives actual TiledCubeRepresentationRecord each tile frame; original levelBytes/tileSize/named immersionWidth cap remains supplied host policy delegated to tiled owner. UNRUN. Required faithful original entry tile warming consumes optional public resources.warm, existing virtual-view/frame/clock, shared-cache ready hold transfer or pending join before warming cancellation; no independent render hold or allocation authority. Actual published preview/shown/preview detail/placement freeze readings expose existing state only, exclude private/cancelled/stale sources. SOURCE ONLY / UNRUN."
+    },
+    {
+      "path": "src/scenes/loadScene.test.ts",
+      "gitBlob": "7b6d2ac52eb1437be23f4f4a83ec152026b910a6",
+      "sha256": "985e668da3974cc915fa5e7ff0fdbd586afb9f24b33e883870e0e3ab469218ec",
+      "destinations": [
+        {
+          "path": "tests/viewer.test.ts",
+          "sha256": "36098b692b18e1686c55afe801c18e36c8749ce7aeead6277cd1f70170d93f60"
+        }
+      ],
+      "transformation": "Existing source lifecycle obligations inform new isolated structural fixtures, rather than copying the mixed host/runtime test setup."
+    },
+    {
+      "path": "src/scenes/panoramaResources.ts",
+      "gitBlob": "d9791774a301fed0bd074f5ed98f94956cd5edf2",
+      "sha256": "d1311f2eb3af959ad612b9eb53de30a0fc9841f3fce8b7772dcb08e84451e13e",
+      "destinations": [
+        {
+          "path": "src/resources.ts",
+          "sha256": "bb3590866bcac38a215d9aaedb747361e524b71781791ce82676cfad94ad985e"
+        }
+      ],
+      "transformation": "Retain dispatch/shared resolved-URL source identity and progressive fallback orchestration through images cache/file service and leaf loaders; no copied broker/cache/uploader or private clock. Optional filesFor(input, representation) selects an actual common ImageFileService per original saved-media group, including recursive preview fallback; omitted port preserves fixed files. Source-only UNRUN. Required faithful acquireTiled repair: public injected actual published asset/revision/cube-preview identity or first declared complete preview; independent per-acquisition atlas and cube holds joined through the same common cache/broker; cached atlas has no fallback reference. All-attempt ordered cleanup/settlement and real decoded late upload retirement fixture. This supersedes prior staged private cached fallback. No leaf algorithm/cache/budget authority changed; SOURCE ONLY / UNRUN."
+    },
+    {
+      "path": "src/scenes/panoramaResources.test.ts",
+      "gitBlob": "924aa65fd1827860114100491256654137ddb5f6",
+      "sha256": "5b579e3745b9992063eb1d2b72a5ea901840ee45652f945629701618197730aa",
+      "destinations": [
+        {
+          "path": "tests/resources.test.ts",
+          "sha256": "970678eaa971b87091ac2cd96bb3f484719466346a3f2a88b855fc24245c32cb"
+        }
+      ],
+      "transformation": "Retain sharing/hold/overlap/security obligations as an actual public images-cache/cubemap-loader composition fixture."
+    },
+    {
+      "path": "src/engine/babylon/panorama/panoramaRenderer.ts",
+      "gitBlob": "ebcf7a17fa113d182bb778db5e99896c07eeda63",
+      "sha256": "eea8bcc0beea315c5a2518a6ae860e64da8bc5598951a3bb4c6564ce86dc66cd",
+      "destinations": [
+        {
+          "path": "src/renderer.ts",
+          "sha256": "0223f8bf4ae0f6673699ad25d1c7f103c8045848609b2a41bea021780729ce92"
+        }
+      ],
+      "transformation": "Retain image drawing adapter using the supplied Babylon scene/runtime camera/frame and public renderer borrowing contract; no second engine, device or scheduler. Hidden reveal respects visibility."
+    },
+    {
+      "path": "src/engine/babylon/panorama/panoramaRenderer.test.ts",
+      "gitBlob": "c152bf8ed9fa3f49eef8277b4a9e4534085cdc03",
+      "sha256": "4edc5f3254272718bbe4d196422acbdbece7b42df776689eee6aefad9573e531",
+      "destinations": [
+        {
+          "path": "tests/renderer.test.ts",
+          "sha256": "9b9d194b8860fb365326e38d77518ee23f53416c8cfdc0ead8b1233d02c4d336"
+        }
+      ],
+      "transformation": "Retain renderer backend/camera/geometry/experiment/lean shader cases with public imports."
+    },
+    {
+      "path": "src/engine/babylon/panorama/panoramaShaders.ts",
+      "gitBlob": "c78ca8b124c65925fd9d07b481d5ebfa1a1e110b",
+      "sha256": "85d6a817382c02849a96c45d4cd10a0dd86b54536828be18c6b5cc90c49fb425",
+      "destinations": [
+        {
+          "path": "src/shaders.ts",
+          "sha256": "5805aad6e7766fe5ccf1617cadefba00376b60ae8c937f9d1fa0ebd6f641864b"
+        }
+      ],
+      "transformation": "Retain viewer/orb/immersion WGSL; format and common colour fragments consumed from their public shader entries."
+    },
+    {
+      "path": "src/engine/babylon/panorama/panoramaShadersWebGL.ts",
+      "gitBlob": "129533f6e8a93ea1c76f8192f98d5d00c0ea5d71",
+      "sha256": "c87f75894ae5a51a6d22a9fd972567d29ed699621dc1201966b2c01d6b2dec62",
+      "destinations": [
+        {
+          "path": "src/shadersWebGl.ts",
+          "sha256": "ca1b513ffe86bf2dc8a15e767a6715cc40de9a59f3ce3100e14a6f9a7102d7a2"
+        }
+      ],
+      "transformation": "Retain viewer/orb/immersion GLSL; format and common colour fragments consumed from their public shader entries."
+    },
+    {
+      "path": "src/settings/catalogue/scenes.ts",
+      "gitBlob": "cd175ed979ed93f29fd171388a49212766924278",
+      "sha256": "e05cf3d5b6a02e72a390965bca7c2a950e75a2f7690ca905fcdc766f6c71dd5d",
+      "destinations": [
+        {
+          "path": "src/settings.ts",
+          "sha256": "d768434534f3af518a44786fc8a5320319d5d795682eb9fb9fda9ff132205e41"
+        }
+      ],
+      "transformation": "Retain APPEARANCE/MOTION/PANORAMA/PANORAMA_SETTINGS IDs/homes/defaults/descriptions excluding tileOutlines; common Loading/Saved and leaf Tiles settings stay owner. Type-only injected UI contract."
+    },
+    {
+      "path": "src/shell/panoramaTabs.ts",
+      "gitBlob": "a3fd1967a1452a66e94ac8c161b74dac06a693d1",
+      "sha256": "cccef5be47529a3153c294d5c423a563a0d301820cc25ed2f0217dbb5e9e73cd",
+      "destinations": [
+        {
+          "path": "src/panels.ts",
+          "sha256": "cc33d8a81b68f1800661ddbccdd8547e9ad937d7abc214b19fe17d67608e7968"
+        }
+      ],
+      "transformation": "Retain Photograph/Links/Detail and image/looking/entering sections as optional DOM adapter with explicit document/viewer/host metadata/UI sections; validated external credit protocols and idempotent cleanup."
+    },
+    {
+      "path": "src/shell/panoramaTabs.test.ts",
+      "gitBlob": "233229c1799e741a8496097f64f8113d4dfd2dd4",
+      "sha256": "c8415c60e3f700fcd37ac459d51d2bcb4141512518e3fe22ff78b9dc6e437357",
+      "destinations": [
+        {
+          "path": "tests/panels.test.ts",
+          "sha256": "b119858c091d26b9edc4f05954cb3957caf31865bacb9a6f97b12aabdff99b28"
+        }
+      ],
+      "transformation": "Existing panel display/lifecycle obligations inform isolated supplied host section/action fixtures."
+    },
+    {
+      "path": "scripts/prepare-panorama.mjs",
+      "gitBlob": "0c24feed78bf33b85d9f8a33fc0110085dc2ce63",
+      "sha256": "9975fa188bdb6fbf1f4a353aef3f4133116360de65dbc3cd85a5772a3d276512",
+      "destinations": [
+        {
+          "path": "node/preparation.mjs",
+          "sha256": "0766453dce095733eb780b8555bff3d26cec2bdf3416578d390fce26e435a905"
+        },
+        {
+          "path": "node/preparation.d.mts",
+          "sha256": "9c934ad51f9b185eb86138b57553b51831a4a38e0fd510fd99ea7fbfe655b7ed"
+        },
+        {
+          "path": "node/prepare-cli.mjs",
+          "sha256": "4d795337620085b057a684ca8fcf824c61840424e7e4e5d2194686e1be0e6ec4"
+        },
+        {
+          "path": "tests/preparation.test.ts",
+          "sha256": "f75a63d2cc986e42faedd5a45f7f60e983f92e6184d25ada9fdd75af274d1b46"
+        }
+      ],
+      "transformation": "Retain arguments, normalized source/pose/colour, naming, revision settings, fragments and local preparation orchestration; codecs/samplers/coverage/tile math consumed through images/leaf public APIs. Exact split-artifact byte qualification pending."
+    },
+    {
+      "path": "scripts/lib/outputDirectory.mjs",
+      "gitBlob": "0e8d5905ca23c3ca72d2a506724d967db3a370bc",
+      "sha256": "9be315714c86402fc63d2d9c8247931ce6a1ec28da8296cf57ada7063300e8cf",
+      "destinations": [
+        {
+          "path": "node/preparation.mjs",
+          "sha256": "0766453dce095733eb780b8555bff3d26cec2bdf3416578d390fce26e435a905"
+        }
+      ],
+      "transformation": "Faithful dated collision-safe build/prepared-scenes default adapted to injected ownerDirectory; no app identity or repository-relative source lookup."
+    },
+    {
+      "path": "scripts/check-scene.mjs",
+      "gitBlob": "8e6c981248a9ce00d30ba40d3f827e022bb5b61a",
+      "sha256": "cdb5f9301be118eadde310f16d6f26578a5778b04a35b497686212f1dac9bcd1",
+      "destinations": [
+        {
+          "path": "fixtures/transfers/scenes-node/scene-check.mjs",
+          "sha256": "de667a90cf745dd266850fd799773045894e86f2e4954ee5217862eba1e42b48"
+        },
+        {
+          "path": "fixtures/transfers/scenes-node/check-cli.mjs",
+          "sha256": "b08467fa06742bcc6e90338ce10407c61d584db555561d5ad4373edcea4f25bb"
+        },
+        {
+          "path": "fixtures/transfers/scenes-node/scene-check.d.mts",
+          "sha256": "2a0f9dbef3f9d032f2e704ee3e393ab2996a21c5a3bbf79633e89494fee41698"
+        }
+      ],
+      "transformation": "SOURCE TRANSFER ONLY to scenes owner: local scene-envelope/file CLI composition using public scenes/images/leaf/360/preview APIs, excluded from 360 production dependencies/exports/artifact."
+    },
+    {
+      "path": "src/scenes/checkSceneFiles.ts",
+      "gitBlob": "034fcc669141d30d9c3b3dd8df74010e1d3b6824",
+      "sha256": "cbb4d327f3de00e49852860d0aad162d2928faa08015c1678bc7ddba181847ce",
+      "destinations": [
+        {
+          "path": "fixtures/transfers/scenes-node/scene-check.mjs",
+          "sha256": "de667a90cf745dd266850fd799773045894e86f2e4954ee5217862eba1e42b48"
+        }
+      ],
+      "transformation": "SOURCE TRANSFER ONLY to scenes owner: retained file headers/declarations/tile levels/byte totals using owner files APIs; traversal and realpath confinement checks; no representation math copied."
+    },
+    {
+      "path": "src/settings/catalogue/renderer.ts",
+      "gitBlob": "da28820181fddb60fe005cc9f817d498691a67ed",
+      "sha256": "172c5e1061288073b949987ce58dd716598b07a0b1ba2e006077861ad4fbe1c8",
+      "destinations": [
+        {
+          "path": "src/settings.ts",
+          "sha256": "d768434534f3af518a44786fc8a5320319d5d795682eb9fb9fda9ff132205e41"
+        }
+      ],
+      "transformation": "Only the three original renderer.experiments panoramaBookkeeping/opaqueImmersion/panoramaShaders records extracted to public 360 settings. Original boolean kinds/off defaults/no numeric bounds/labels/descriptions/reasons/live flags/source attribution and renderer/experiments/main home retained; owner constants renamed. Included once in VIEWER_PARAMETERS. Generic all/presentationCandidates stay Renderer-owned; legacy Renderer handoff used as reference only, no implementation import."
+    },
+    {
+      "path": "src/input/globeNavigation.ts",
+      "gitBlob": "9f86376a5e0533951de80fe98c34ea6eb434aafc",
+      "sha256": "08a986bd4b559d5587d7b4f9723aa85389aa2c82033811430df248b747bcae31",
+      "sourceBytes": 9444,
+      "retainedOriginalPath": "build/source-only/2026-10-09T19-43-00Z-panorama-controller-contributions/originals/src/input/globeNavigation.ts",
+      "destinations": [
+        {
+          "path": "src/gamepad.ts",
+          "sha256": "f736f29b2a7da6432ae2a95e797876ccc4b9a87ca998d39a1f828a5e2135b554"
+        }
+      ],
+      "transformation": "Extract exactly four original PANORAMA_GAMEPAD_ACTIONS descriptors and four standard panorama bindings/context. Common transform and existing named controller deadzone supplied by host; gamepad-tools/core imports are type-only. Globe action adapter/profile/driver remain Engine/Devices; no input/viewer/camera/momentum/frame algorithm changes. Current source/fixtures UNRUN."
+    }
+  ],
+  "newFiles": [
+    {
+      "path": ".gitignore",
+      "sha256": "b93944dbf95cad1850d916ab7483bccf6251109364e63f7e5802ae656a4a93fb",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "b9add53cda00a9ea9b821b325006f5f27cd459da1e4999b1f92a946ba1aabf7d",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "sha256": "83f19fa9654ed44f6420bc292cae85d9d8689651cd64595fced27c117ef2b614",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "README.md",
+      "sha256": "c7ffc31e374b48067419df81be370395e21a99082536aee96933f72bd03fa16b",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "eslint.config.js",
+      "sha256": "02cb51e512678cceb469ddc86401a1c7c0afd8acbdd30c28a02835afb37cd14f",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "fixtures/installed-consumer.mjs",
+      "sha256": "eb25ce232f3ef6f03a53e3ce406e3547d4ef2587a819bef5f1423e9b5430eeb2",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "fixtures/public-consumer.ts",
+      "sha256": "4dcd3177516befc1c389664c1f132512a3d60a96a508030b7ad62418cd65746a",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "fixtures/tsconfig.json",
+      "sha256": "8d9ee340ca8127e47a1d2096fa0c7713d47d34cc1f9d0961620002d0614f3529",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "package.json",
+      "sha256": "766b56d681e3a395ade829dd7ea09c9ebb9b865c9638e2ea166fde28fa50dd9e",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "scripts/check-public-consumer.mjs",
+      "sha256": "7e0e2a664d8c6e8f77cae77e9e07c5cdb287f537bce040aeb19602bfb918018a",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "src/catalogue.ts",
+      "sha256": "849f6fc056461d266f4c1c5865757a93705fcaca39fc3fab82ff75096b605dd7",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "src/index.ts",
+      "sha256": "a893fd989e078df2b10ea1902e95e76b455fb859cf12dd141e9a3a281ec496d8",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "tests/selection.test.ts",
+      "sha256": "8ef4acd5087ce863439483a453e263e58fc167b525a1a1018fe1c60383688f3a",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "d651eea9e4473e1a7eccc8ef43563bab184af90c1128483d4678219ceeecde47",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "vitest.config.ts",
+      "sha256": "906fc0b1a20a82c30aa196ed678aac732bc317f99a0141f87e3c9b178e775f38",
+      "origin": "New split host-port contract, composition policy, source-only fixture or package/tooling/documentation scaffold; no external implementation copied."
+    },
+    {
+      "path": "docs/controller-contributions.md",
+      "sha256": "bd9434244d8c510bd70dd39e4ed73591d4fd5ebb42db3ff34f08dc87ce5b722d",
+      "origin": "Source-only public controller and per-source tile contracts, actual immutable provenance/fixture inputs, rollback and current community/CI-gate notes; unexecuted."
+    }
+  ],
+  "boundaryNotes": [
+    "No production scenes/engine/flight/campus dependency. Scene checker transfer excluded from package files.",
+    "Common images services/cache/broker, one host renderer/uploader/transfer tracker/frame; format structures/math/shaders remain leaf-owned.",
+    "Source fixtures prepared, none run in this source-only lease. Version 0.1.0 is an unqualified staging version, not an artifact pin."
+  ],
+  "documentSourceMaps": [
+    {
+      "sourcePath": "docs/panorama-exit-animation-prompt.md",
+      "destinationPath": "docs/panorama-exit-animation-prompt.md",
+      "sourceBlob": "a295357da5e216527e9f778739ec11c2c4be5e31",
+      "sourceSha256": "112e7e66dd2a26755441a70b148d33f5afc485776b3faf448196d816a4fa7708",
+      "destinationSha256": "112e7e66dd2a26755441a70b148d33f5afc485776b3faf448196d816a4fa7708",
+      "transform": "Immutable dated source prose retained byte for byte; proposal capability statements are not implementation or validation receipts.",
+      "sourceRepository": "foss-earth/foss-earth.github.io",
+      "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d"
+    },
+    {
+      "sourcePath": "docs/panorama-mode-prompt.md",
+      "destinationPath": "docs/panorama-mode-prompt.md",
+      "sourceBlob": "beff58636e48503a30fa6ae4c6bd71ac855883ee",
+      "sourceSha256": "90e1702127ec3202b805c09d8672a166526b4797fb0ebb3c0b78f613db62b77e",
+      "destinationSha256": "90e1702127ec3202b805c09d8672a166526b4797fb0ebb3c0b78f613db62b77e",
+      "transform": "Immutable dated source prose retained byte for byte; proposal capability statements are not implementation or validation receipts.",
+      "sourceRepository": "foss-earth/foss-earth.github.io",
+      "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d"
+    }
+  ],
+  "primarySourceSnapshot": {
+    "createdAtUtc": "2026-10-09T21-18-52Z",
+    "status": "source-only; no qualification or artifact seal",
+    "authoredFiles": [
+      {
+        "path": ".attribution-release.json",
+        "sha256": "c5324ea9476d99afbc5f63e9d5a15d597dd7ee27546499c392046b55fc361131",
+        "bytes": 2045,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": ".attribution.json",
+        "sha256": "e4493f3031a5051398339cf9649a8e18efb8ece96f512761d8d145daf8347f7a",
+        "bytes": 491,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": ".gitignore",
+        "sha256": "b93944dbf95cad1850d916ab7483bccf6251109364e63f7e5802ae656a4a93fb",
+        "bytes": 41,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "AGENTS.md",
+        "sha256": "b9add53cda00a9ea9b821b325006f5f27cd459da1e4999b1f92a946ba1aabf7d",
+        "bytes": 391,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "CODE_OF_CONDUCT.md",
+        "sha256": "c3a907b9e659a0f5a4c701be1b34a7d416526c3a99f129bf4d3b9db09c7ffa9d",
+        "bytes": 3442,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "CONTRIBUTING.md",
+        "sha256": "691d3378a454a76d5d818c03fc981ea875344b76c466bac7b649ef46e3fbee61",
+        "bytes": 2233,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "README.md",
+        "sha256": "d54b7c14398af4f7e5202aa263232091e74279a59e7a567da011b0f4aa062f54",
+        "bytes": 10546,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "SECURITY.md",
+        "sha256": "6baf6d3c1755360f5d902275c893074fd17af2fc10c140fe932b8a90d77d9942",
+        "bytes": 791,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "SOURCE_LINEAGE.json",
+        "sha256": "e25815a66f12af966d7f0fa037e9de5e0547847f7a04f579ada6dd4a9f54385f",
+        "bytes": 12161,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "eslint.config.js",
+        "sha256": "02cb51e512678cceb469ddc86401a1c7c0afd8acbdd30c28a02835afb37cd14f",
+        "bytes": 404,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "package.json",
+        "sha256": "cf063a062dddc2a7666ddcfce1abb93d9384eb3e75c64695e53a72d2e678e235",
+        "bytes": 3957,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "tsconfig.json",
+        "sha256": "d651eea9e4473e1a7eccc8ef43563bab184af90c1128483d4678219ceeecde47",
+        "bytes": 548,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "vitest.config.ts",
+        "sha256": "906fc0b1a20a82c30aa196ed678aac732bc317f99a0141f87e3c9b178e775f38",
+        "bytes": 223,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": ".github/workflows/attribution-check.yml",
+        "sha256": "63349507da9d004752bb0e43c681089dfd9fd6c26bf8047738cb19025f15135e",
+        "bytes": 406,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "docs/controller-contributions.md",
+        "sha256": "bd9434244d8c510bd70dd39e4ed73591d4fd5ebb42db3ff34f08dc87ce5b722d",
+        "bytes": 6465,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "docs/saved-media-services.md",
+        "sha256": "f2b240728413f74ac756f74e24ba7fb6e9eed4c947276e50098c0d780be8676b",
+        "bytes": 11289,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "docs/source-specifications.md",
+        "sha256": "adb035be69f70a6742555ef8947dc30a56a0d76c7116d70fa9576703a8914c99",
+        "bytes": 739,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "fixtures/installed-consumer.mjs",
+        "sha256": "7fac1091d939f016f59ec613d78ed8876cfc5a3cceac6b83e03fae1250d83333",
+        "bytes": 39145,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "fixtures/public-consumer.ts",
+        "sha256": "402601dc7c2cf5ad648231e9cd5b115afbb9c1afa9387a2b8cc2263ec4172f04",
+        "bytes": 4862,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "fixtures/tsconfig.json",
+        "sha256": "8d9ee340ca8127e47a1d2096fa0c7713d47d34cc1f9d0961620002d0614f3529",
+        "bytes": 289,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "scripts/check-public-consumer.mjs",
+        "sha256": "7e0e2a664d8c6e8f77cae77e9e07c5cdb287f537bce040aeb19602bfb918018a",
+        "bytes": 5081,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "src/catalogue.ts",
+        "sha256": "849f6fc056461d266f4c1c5865757a93705fcaca39fc3fab82ff75096b605dd7",
+        "bytes": 2032,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "src/index.ts",
+        "sha256": "a893fd989e078df2b10ea1902e95e76b455fb859cf12dd141e9a3a281ec496d8",
+        "bytes": 233,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "tests/selection.test.ts",
+        "sha256": "4b21509766b988be33ed56e4b7e00381b7c692624a58e5fcf7b57d57e969e8ee",
+        "bytes": 4212,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "tests/tiledFallback.test.ts",
+        "sha256": "b5cf6fbffd64ebb460d9d8f35fa3497c069776fe080362e7278f2e4717f003ed",
+        "bytes": 10664,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      },
+      {
+        "path": "tests/warming.test.ts",
+        "sha256": "e968d70a2846e6636c085ca25e50ea0b5bdaf18a9fb953785933dcbdc6591e52",
+        "bytes": 7373,
+        "status": "authored source/scaffold/adapter/fixture; UNRUN"
+      }
+    ],
+    "checksExecuted": [],
+    "sourceRemoved": false,
+    "canonicalAppConsumerAdoption": null,
+    "acceptedArtifacts": []
+  },
+  "viewerExperimentSettingsIncrement": {
+    "date": "2026-10-09",
+    "status": "SOURCE ONLY / UNRUN",
+    "publicEntry": "@foss-earth/360/settings",
+    "publicExports": [
+      "VIEWER_EXPERIMENT_IDS",
+      "VIEWER_EXPERIMENT_PARAMETERS"
+    ],
+    "aggregate": "VIEWER_PARAMETERS includes each viewer experiment once",
+    "preservedIds": [
+      "renderer.experiments.panoramaBookkeeping",
+      "renderer.experiments.opaqueImmersion",
+      "renderer.experiments.panoramaShaders"
+    ],
+    "excludedRendererOwnedIds": [
+      "renderer.experiments.all",
+      "renderer.experiments.presentationCandidates"
+    ],
+    "home": {
+      "tab": "renderer",
+      "section": "experiments",
+      "level": "main"
+    },
+    "defaultsAndBounds": "Original boolean false defaults; no numeric bounds",
+    "beforeSources": "build/source-only/2026-10-09T18-57-38Z-viewer-experiment-settings/before",
+    "originalSourceSelection": "build/source-only/2026-10-09T18-57-38Z-viewer-experiment-settings/original-source-selection.json",
+    "installedFixture": "fixtures/installed-consumer.mjs through scripts/check-public-consumer.mjs with existing pure import poison and outside-workspace negative control",
+    "declarationFixture": "fixtures/public-consumer.ts imports actual public settings and assigns each literal original ID",
+    "legacyCompatibility": "Register 360 VIEWER_PARAMETERS once alongside Renderer-owned generic records; do not additionally register LEGACY_360_RENDERER_PARAMETER_HANDOFF. No behavior or generic Renderer implementation moved.",
+    "checksExecuted": [],
+    "currentArtifact": null,
+    "actualConsumerAdoption": null
+  },
+  "panoramaControllerContribution20261009": {
+    "status": "SOURCE ONLY; current source/fixtures/checks/artifacts/adoption UNRUN; explicit RELEASE",
+    "beforeRoot": "build/source-only/2026-10-09T19-43-00Z-panorama-controller-contributions/before",
+    "beforeManifestSha256": "2687da06f93fe9e32cd0b6df6338e70b00adbc307b8cbff2f7e8a6e22ee7e91f",
+    "document": "docs/controller-contributions.md",
+    "originalController": {
+      "path": "src/input/globeNavigation.ts",
+      "blob": "9f86376a5e0533951de80fe98c34ea6eb434aafc",
+      "bytes": 9444,
+      "sha256": "08a986bd4b559d5587d7b4f9723aa85389aa2c82033811430df248b747bcae31",
+      "actualRetainedBytesRead": true
+    },
+    "publicEntries": [
+      "@foss-earth/360",
+      "@foss-earth/360/core"
+    ],
+    "exports": {
+      "PANORAMA_GAMEPAD_ACTIONS": "readonly ActionDescriptor[]",
+      "PanoramaProfileContribution": "readonly contexts: readonly string[]; bindings(slot: number, deadzone: number): readonly BindingSpec[]",
+      "createPanoramaProfileContribution": "(transform: Readonly<BindingTransformSpec>) => PanoramaProfileContribution"
+    },
+    "productionRuntimeImportsAdded": [],
+    "defaultBindings": [
+      {
+        "id": "standard-panorama-look-x",
+        "actionId": "panorama.lookX",
+        "context": "panorama",
+        "axis": 2,
+        "invert": false
+      },
+      {
+        "id": "standard-panorama-look-y",
+        "actionId": "panorama.lookY",
+        "context": "panorama",
+        "axis": 3,
+        "invert": true
+      },
+      {
+        "id": "standard-panorama-zoom",
+        "actionId": "panorama.zoom",
+        "context": "panorama",
+        "positiveButton": 7,
+        "negativeButton": 6
+      },
+      {
+        "id": "standard-panorama-exit",
+        "actionId": "panorama.exit",
+        "context": "panorama",
+        "button": 1
+      }
+    ],
+    "existingControllerTransformAndDeadzoneHostOwned": true,
+    "requiredPerSourceTilePolicy": {
+      "port": "ViewerResourceCompositionPorts.tiles.selection(representation: TiledCubeRepresentationRecord): TileSelectionParameters",
+      "actualPerFrameRecordForwarded": true,
+      "originalSource": "src/scenes/loadScene.ts",
+      "originalBlob": "7d5545e0945f42a4b1999db4c8f78b608ada7ce0",
+      "originalBytes": 130968,
+      "originalSha256": "0e326ec830c0056684cbc82884a520592859a0152a70c02dab5265498b0e3b51",
+      "immutableActualBytesRetained": true,
+      "hostNamedWidth": "scene.panorama.immersionWidth",
+      "selectionAlgorithmCopied": false
+    },
+    "fixtures": {
+      "actualInstalledBody": "fixtures/installed-consumer.mjs",
+      "strictInstalledDeclaration": "fixtures/public-consumer.ts",
+      "controllerAssertions": "full four descriptors; full bindings with original defaults and custom host slot/deadzone; actual public Engine profile/action integration; pure root/core identity and denied peer negative",
+      "tileAssertions": "actual public resource/common ImageFileService/tiled composition; exact source identities; distinct pyramid caps1/0; live supplied width caps2/1; real public tiled detail; final common grants empty"
+    },
+    "allOriginalTestAssertionsPreserved": true,
+    "viewerLookFlightMomentumAlgorithmsChanged": false,
+    "sourceLineageUnchangedSha256": "3eb0b925d7b27698afdcded33648533a2a0831919e2608ffe22b821e02c145df",
+    "newSourcePathPublicationLineagePending": true,
+    "packageDependenciesLocksHistoryCiNoticesUnchanged": true,
+    "changedPaths": [
+      "src/gamepad.ts",
+      "src/index.ts",
+      "src/resources.ts",
+      "fixtures/public-consumer.ts",
+      "fixtures/installed-consumer.mjs",
+      "docs/controller-contributions.md",
+      "AGENTS.md",
+      "CONTRIBUTING.md",
+      "README.md"
+    ],
+    "communityCorrection": {
+      "coordinatorDecision": "2026-10-09T19:38:06.892938+00:00",
+      "currentRule": "You cannot have AI as a co-author, or your contributions will be rejected.",
+      "placement": "AGENTS exact current sentence; CONTRIBUTING later Commit attribution with advertising rationale; README rejection line removed, policy links retained",
+      "unchanged": [
+        "CODE_OF_CONDUCT.md",
+        "SECURITY.md",
+        "LICENSE",
+        "NOTICE",
+        "SOURCE_LINEAGE.json"
+      ],
+      "frozenCiRevision": "9e046dd482e0229dc7c7b2d71b079d5905664656",
+      "oldConformanceScope": "frozen uppercase rule only",
+      "replacementCiPolicyCallerPinPending": true,
+      "replacementPerOwnerConformancePending": true
+    },
+    "checksExecutedByChild": [],
+    "acceptedArtifacts": [],
+    "consumerAdoption": null,
+    "release": "EXPLICIT SOURCE-ONLY RELEASE: 360/main sole-writer lease returned to primary. No further 360 writes/checks without reassignment."
+  },
+  "savedMediaFileService20261009": {
+    "status": "SOURCE ONLY / UNRUN; explicit RELEASE",
+    "beforeRoot": "build/source-only/2026-10-09T20-01-24Z-saved-media-file-services/before",
+    "beforeManifestSha256": "5f0150447081687e7ddff8865f0999c157d30051a4e9da38be8d5e623f7442e5",
+    "originalSourceSelection": "build/source-only/2026-10-09T20-01-24Z-saved-media-file-services/original-source-selection.json",
+    "originalSourceSelectionSha256": "d6c23b730327b53a6d784e5d264c844aae649a6ee39bd5ae3530eacb0d8b9429",
+    "publicEntry": "@foss-earth/360/resources",
+    "signature": "filesFor?(input: ViewerImageInput, representation: ImageRepresentation): ImageFileService",
+    "sharedAuthority": "All selected common services use the existing host broker; cache/uploader/transfer tracker/renderer/frame unchanged.",
+    "preservedBehavior": "Different asset revisions and representations keep separate saved media groups despite reused URLs; tiled source and recursive cube preview select their own groups; repeated source-cache references retain original group.",
+    "compatibility": "Optional; absent selects existing fixed files exactly. Existing source/installed assertion bodies retained.",
+    "fixtures": {
+      "source": "tests/resources.test.ts",
+      "installedRuntime": "fixtures/installed-consumer.mjs through scripts/check-public-consumer.mjs",
+      "strictInstalledDeclaration": "fixtures/public-consumer.ts",
+      "assertions": "Five actual common service identities using one broker; shared URLs under different revisions and representation groups; recursive tiled cube fallback; bounded saved reads; repeated placement cached texture sharing; no default/network calls; final common reservations empty."
+    },
+    "changedPaths": [
+      "src/resources.ts",
+      "tests/resources.test.ts",
+      "fixtures/public-consumer.ts",
+      "fixtures/installed-consumer.mjs",
+      "README.md",
+      "docs/saved-media-services.md",
+      "PROVENANCE.json",
+      "SOURCE_RECEIPT.json"
+    ],
+    "document": "docs/saved-media-services.md",
+    "algorithmsDependenciesLocksCiHistoryIndexesRefsNoticesUnchanged": true,
+    "sourceLineageUnchanged": true,
+    "checksExecutedByChild": [],
+    "acceptedArtifacts": [],
+    "actualConsumerAdoption": null,
+    "release": "EXPLICIT SOURCE-ONLY RELEASE: 360/main sole-writer lease returned to primary after receipt. No further writes/checks without reassignment.",
+    "communityDirectiveAcknowledgement": {
+      "receivedFromPrimary": "Latest direct user broadcast relayed during active 360 source-only lease",
+      "reread": [
+        "../0sfs/build/repository-split/coordination.md",
+        "../0sfs/build/repository-split/assignments/community-documents-all-owners.md"
+      ],
+      "mandatoryRule": "You cannot have AI as a co-author, or your contributions will be rejected.",
+      "placement": "AGENTS policy and later CONTRIBUTING Commit attribution section; absent README and CONTRIBUTING opening",
+      "rationale": "AI vendor credits in permanent contribution history can imply endorsement and are banned as advertising; human contributor remains accountable for accuracy, review, provenance and rights.",
+      "readmeLocalLinks": [
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "SECURITY.md"
+      ],
+      "realFiles": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "b9add53cda00a9ea9b821b325006f5f27cd459da1e4999b1f92a946ba1aabf7d",
+          "bytes": 391
+        },
+        {
+          "path": "CODE_OF_CONDUCT.md",
+          "sha256": "c3a907b9e659a0f5a4c701be1b34a7d416526c3a99f129bf4d3b9db09c7ffa9d",
+          "bytes": 3442
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "83f19fa9654ed44f6420bc292cae85d9d8689651cd64595fced27c117ef2b614",
+          "bytes": 2098
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+          "bytes": 34523
+        },
+        {
+          "path": "SECURITY.md",
+          "sha256": "6baf6d3c1755360f5d902275c893074fd17af2fc10c140fe932b8a90d77d9942",
+          "bytes": 791
+        },
+        {
+          "path": "NOTICE",
+          "sha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993",
+          "bytes": 359
+        },
+        {
+          "path": "README.md",
+          "sha256": "6197bb2fffd0ff9048944d9b3c337932cc5c81840035f7dc4d6299bade2c1ad2",
+          "bytes": 8575
+        }
+      ],
+      "originalLicenseNoticePreserved": true,
+      "children": [],
+      "relayRequired": false,
+      "newSharedCiPolicyCallerConformancePending": true,
+      "remoteAdmissionOrPublicPublicationClaimed": false
+    }
+  },
+  "publishedResourcesAndEntryWarming20261009": {
+    "status": "SOURCE ONLY / UNRUN; explicit RELEASE after exact final receipt",
+    "beforeRoot": "build/source-only/2026-10-09T20-08-17Z-published-resource-readings/before",
+    "beforeManifestSha256": "62af1d857dccfb7d3545653c0b97e31837cb3fd2f848031c3a0249f2a56129ad",
+    "beforeFixtureReconstruction": {
+      "record": "build/source-only/2026-10-09T20-08-17Z-published-resource-readings/resources-fixture-before-reconstruction.json",
+      "sha256": "b41e957778c9a68aca8c5469d35e1d204be03f80ac9e7760d37732d8f22649e2",
+      "honestMethod": "Prior tests/resources.test.ts before-copy omission corrected by reversing only two current additions, then requiring exact hash/length match with retained previous source receipt before writing. Every earlier before-manifest retained; no original fixture asserted without a matching source pin."
+    },
+    "originalSourceSelection": "build/source-only/2026-10-09T20-08-17Z-published-resource-readings/original-source-selection.json",
+    "originalSourceSelectionSha256": "cb8939386af8ebcec24125177ad0eb8e239852b45b98bfee7a0f03013770ca83",
+    "originalSource": {
+      "path": "src/scenes/loadScene.ts",
+      "sourceRevision": "90e23b3ee96f53ec5900afc5991a21fffa58649d",
+      "gitBlob": "7d5545e0945f42a4b1999db4c8f78b608ada7ce0",
+      "sha256": "0e326ec830c0056684cbc82884a520592859a0152a70c02dab5265498b0e3b51",
+      "bytes": 130968,
+      "actualOriginalBytesRetained": true
+    },
+    "publicExports": {
+      "@foss-earth/360": [
+        "ViewerResourceReadings",
+        "PublishedImageViewer",
+        "createViewerSelection(ports: ViewerSelectionPorts): Pick<ViewerResources, preview | immersion | faceTexels | warm>"
+      ],
+      "@foss-earth/360/viewer": "createImageViewer(options: ImageViewerOptions): PublishedImageViewer; ViewerResources.warm?(input: ViewerImageInput, view: LookState): ViewerSourceChoice | null",
+      "@foss-earth/360/resources": "createViewerResources(ports): ViewerResources including optional exact-key warm selector"
+    },
+    "readings": {
+      "currentSources": "Actual live published preview/shown representation IDs only. Hidden prepared, private fallback, pending, cancelled and stale sources excluded.",
+      "describeResources": "Actual published successful preview representation, owner faceTexels, retained choice limitation; no always-null proxy or metadata inference.",
+      "isPlacementFrozen": "Actual live published entry frozenPlacement reading for original ground-watcher skip.",
+      "compatibility": "Legacy ImageViewer structural contract unchanged; actual factory returns intersection. Host must guard published asset id/revision before using placed-id residency during replacement preparation."
+    },
+    "warming": {
+      "source": "Original warmTiles/stopWarming/tickTiles and actual flight/expansion/fade entry calls",
+      "selector": "Delegate existing immersion choice, actual tiled-only result, same public owner key/admission",
+      "warmingPriority": 5,
+      "warmingOverlap": true,
+      "immersionPriority": 10,
+      "frames": "Actual existing onFrame with virtual opening presentation, same now and image content rotation; no new frame subscription, timer, scheduler or rendering hold.",
+      "readyHandoff": "Transfer exact same held source without another acquisition/allocation.",
+      "pendingHandoff": "Join actual common cache source synchronously before releasing warming waiter, including zero kept-GPU budget.",
+      "cancellation": "Cancel warming request and release its held source; real cache retires actual unabortable late output. Injected loader retains native input/allocation until actual disposal.",
+      "silentAcquisitionFailure": "Faithful original warm failure leaves error reporting to subsequent immersive acquisition."
+    },
+    "fixtures": {
+      "source": [
+        "tests/viewer.test.ts",
+        "tests/warming.test.ts",
+        "tests/selection.test.ts",
+        "tests/resources.test.ts"
+      ],
+      "strictPublicDeclarations": "fixtures/public-consumer.ts",
+      "actualInstalledRuntime": "fixtures/installed-consumer.mjs through scripts/check-public-consumer.mjs",
+      "sourceBodies": "Original assertions retained; new hidden/late/private residency cases and real common broker/cache/grants with injected texture fixture. Flight/expansion virtual frame, one ready allocation transfer, pending priorities5/10 join, cancelled retained late allocation disposal, overlap settlement, final empty grants, optional selector tiled-only and identical resource key.",
+      "installedBodies": "Original guard/positive/negative and lifecycle assertions retained; actual installed public factory with same causal common broker/cache/grants, both entry paths, pending join/cancel cases. No GPU or device qualification claimed.",
+      "newTestBeforeState": "tests/warming.test.ts absent before this renewal"
+    },
+    "packageMetadataFiles": {
+      "authorizedByPrimary": true,
+      "added": [
+        "AGENTS.md",
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "SOURCE_RECEIPT.json"
+      ],
+      "dependenciesLocksExportsUntouched": true,
+      "status": "File inclusion only; pack UNRUN"
+    },
+    "changedPaths": [
+      "src/ports.ts",
+      "src/viewer.ts",
+      "src/selection.ts",
+      "src/resources.ts",
+      "tests/viewer.test.ts",
+      "tests/warming.test.ts",
+      "tests/selection.test.ts",
+      "tests/resources.test.ts",
+      "fixtures/public-consumer.ts",
+      "fixtures/installed-consumer.mjs",
+      "README.md",
+      "docs/saved-media-services.md",
+      "package.json",
+      "PROVENANCE.json",
+      "SOURCE_RECEIPT.json"
+    ],
+    "existingLookFlightMomentumLeafSpatialAlgorithmsUntouched": true,
+    "dependenciesLocksCIHistoryRefsIndexesCanonicalOtherOwnersUntouched": true,
+    "sourceLineageUnchangedSha256": "3eb0b925d7b27698afdcded33648533a2a0831919e2608ffe22b821e02c145df",
+    "newSourceFixtureLineageStillPending": true,
+    "checksExecutedByChild": [],
+    "acceptedArtifacts": [],
+    "actualConsumerAdoption": null,
+    "communityDirectiveAcknowledgement": {
+      "receivedFromPrimary": "Latest repeated direct user community broadcasts relayed during this active renewed 360 source-only lease; coordinator ledger and exact all-owner assignment reread.",
+      "reread": [
+        "../0sfs/build/repository-split/coordination.md",
+        "../0sfs/build/repository-split/assignments/community-documents-all-owners.md"
+      ],
+      "mandatoryRule": "You cannot have AI as a co-author, or your contributions will be rejected.",
+      "placement": "AGENTS policy and later CONTRIBUTING Commit attribution section; absent README and CONTRIBUTING opening",
+      "rationale": "AI vendor credits in permanent contribution history can imply endorsement and are banned as advertising; human contributor remains accountable for accuracy, review, provenance and rights.",
+      "readmeLocalLinks": [
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "SECURITY.md"
+      ],
+      "realFiles": [
+        {
+          "path": "AGENTS.md",
+          "sha256": "b9add53cda00a9ea9b821b325006f5f27cd459da1e4999b1f92a946ba1aabf7d",
+          "bytes": 391
+        },
+        {
+          "path": "CODE_OF_CONDUCT.md",
+          "sha256": "c3a907b9e659a0f5a4c701be1b34a7d416526c3a99f129bf4d3b9db09c7ffa9d",
+          "bytes": 3442
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "sha256": "691d3378a454a76d5d818c03fc981ea875344b76c466bac7b649ef46e3fbee61",
+          "bytes": 2233
+        },
+        {
+          "path": "LICENSE",
+          "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0",
+          "bytes": 34523
+        },
+        {
+          "path": "SECURITY.md",
+          "sha256": "6baf6d3c1755360f5d902275c893074fd17af2fc10c140fe932b8a90d77d9942",
+          "bytes": 791
+        },
+        {
+          "path": "NOTICE",
+          "sha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993",
+          "bytes": 359
+        },
+        {
+          "path": "README.md",
+          "sha256": "0bea9df1a20c1659bae8521d6f70b05b3f94609db3ec87b2fdc9b0f043e5257f",
+          "bytes": 10090
+        }
+      ],
+      "originalLicenseNoticePreserved": true,
+      "children": [],
+      "relayRequired": false,
+      "newSharedCiPolicyCallerConformancePending": true,
+      "remoteAdmissionOrPublicPublicationClaimed": false,
+      "allDocumentsPreservedFromPrimaryNormalization": true,
+      "noChildWriters": true
+    },
+    "release": "EXPLICIT SOURCE-ONLY RELEASE: 360/main sole-writer lease returned to primary after final exact receipt. No further writes or checks without reassignment."
+  },
+  "perAcquisitionTiledFallback20261009": {
+    "status": "SOURCE ONLY / UNRUN; explicit RELEASE after physical receipt",
+    "beforeRoot": "build/source-only/2026-10-09T20-44-01Z-per-acquisition-tiled-fallback/before",
+    "beforeManifestSha256": "71cfdb9cf17940654bbbe1022637942abff816d144825d0f94efb657b1748c2c",
+    "originalSourceSelection": "build/source-only/2026-10-09T20-44-01Z-per-acquisition-tiled-fallback/original-source-selection.json",
+    "originalSourceSelectionSha256": "966d9498a664c7b27b70100843a5190ce7bddf336128f288197e6008d8cb64d8",
+    "requiredOriginalBehavior": "Actual retained original loadScene warm/refine passes entry.preview.handle.representation; panoramaResources acquireTiled defaults first declared complete preview, acquires atlas+cube independently, waits both, releases both per caller and retains each source independently within common idle GPU budget.",
+    "publicEntry": "@foss-earth/360/resources",
+    "publicSignature": "ViewerResourceCompositionPorts.previewForTiles?(input: ViewerImageInput, representation: TiledCubeRepresentationRecord): {asset:{id:string;revision:string};representation:string} | null",
+    "hostContract": "Supply only actual published viewer describeImage/currentSources preview identity. Owner verifies asset id/revision plus declared preview/cube record. Absent/null/stale/foreign/missing/non-preview reads select first declared complete cube; no sharper preview chooser.",
+    "ownership": "Cached tiled ComposedImageSource owns atlas/table only: source:null and tiles:TiledSourceTextures. Each acquire independently holds atlas and resolved cube through the one common cache/broker; returned ViewerSource remains complete with actual per-caller cube texture. Idle atlas cannot pin old/private preview; changing published preview reuses same atlas without new allocation.",
+    "compatibility": "Optional input reading. Whole ComposedImageSource stays complete. Private ComposedImageSource.source now nullable; callers directly reading cache source must narrow. Returned ViewerSource.source/representation/key/detail/onFrame API unchanged. Prior fixed files and filesFor group selection preserved. Legacy structural ImageViewer untouched.",
+    "errors": "All acquisitions settle before complete return. Primary failures retain atlas/preview order with identical shared cancellation reason deduplicated; every fulfilled hold released. Release/settlement attempt atlas then preview, preserve errors and remain idempotent even after supplied wrapper throws. Current/generation guard covers both sources. Native cube input retained through actual late output disposal; cleanup may fail but remaining decoded inputs and common grants retire.",
+    "fixtures": {
+      "source": "tests/tiledFallback.test.ts",
+      "actualInstalled": "fixtures/installed-consumer.mjs through scripts/check-public-consumer.mjs",
+      "strictDeclarations": "fixtures/public-consumer.ts assigns optional reading from actual PublishedImageViewer and nullable private cache-source shape",
+      "causalAssertions": [
+        "actual public viewer publication/private preparation/replacement",
+        "first-declared default for absent/null/stale/foreign/missing IDs; sharper chooser never called",
+        "one cached atlas reused with changed published cube texture",
+        "exact live heldReferences and idle gpuBytes atlas+72 sum; independent release no hidden fallback holder",
+        "ordered all-attempt throwing release/settlement wrappers release actual common holds; retries idempotent; overlap settles",
+        "cancelled pending actual common decoded24 retains until nonabortable late upload; output disposal throw precedes actual input close throw; all six close and final common grants empty"
+      ],
+      "nativeClaim": "Injected textures/atlas lifecycle fixtures; no GPU/device qualification",
+      "allExistingAssertionBodiesRetained": true,
+      "newTestBeforeState": "tests/tiledFallback.test.ts did not exist before current lease"
+    },
+    "changedPaths": [
+      "src/resources.ts",
+      "tests/tiledFallback.test.ts",
+      "fixtures/public-consumer.ts",
+      "fixtures/installed-consumer.mjs",
+      "README.md",
+      "docs/saved-media-services.md",
+      "PROVENANCE.json",
+      "SOURCE_RECEIPT.json"
+    ],
+    "existingAlgorithmLookMomentumOwnerBoundariesSettingsDepsLocksCIHistoryRefsIndexCanonicalOtherOwnerFilesUntouched": true,
+    "sourceLineageUnchangedSha256": "3eb0b925d7b27698afdcded33648533a2a0831919e2608ffe22b821e02c145df",
+    "newFixtureLineagePending": true,
+    "checksExecutedByChild": [],
+    "acceptedArtifacts": [],
+    "actualConsumerAdoption": null,
+    "communityDirectiveAcknowledgement": {
+      "receivedFromPrimary": "Repeated current all-owner community directive relayed and exact coordinator ledger/all-owner assignment reread before this renewed fallback source-only lease.",
+      "reread": [
+        "../0sfs/build/repository-split/coordination.md",
+        "../0sfs/build/repository-split/assignments/community-documents-all-owners.md"
+      ],
+      "mandatoryRule": "You cannot have AI as a co-author, or your contributions will be rejected.",
+      "placement": "AGENTS policy and later CONTRIBUTING Commit attribution section; absent README and CONTRIBUTING opening",
+      "rationale": "AI vendor credits in permanent contribution history can imply endorsement and are banned as advertising; human contributor remains accountable for accuracy, review, provenance and rights.",
+      "readmeLocalLinks": [
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "SECURITY.md"
+      ],
+      "realFiles": [
+        {
+          "path": "AGENTS.md",
+          "bytes": 391,
+          "sha256": "b9add53cda00a9ea9b821b325006f5f27cd459da1e4999b1f92a946ba1aabf7d"
+        },
+        {
+          "path": "CODE_OF_CONDUCT.md",
+          "bytes": 3442,
+          "sha256": "c3a907b9e659a0f5a4c701be1b34a7d416526c3a99f129bf4d3b9db09c7ffa9d"
+        },
+        {
+          "path": "CONTRIBUTING.md",
+          "bytes": 2233,
+          "sha256": "691d3378a454a76d5d818c03fc981ea875344b76c466bac7b649ef46e3fbee61"
+        },
+        {
+          "path": "LICENSE",
+          "bytes": 34523,
+          "sha256": "0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0"
+        },
+        {
+          "path": "SECURITY.md",
+          "bytes": 791,
+          "sha256": "6baf6d3c1755360f5d902275c893074fd17af2fc10c140fe932b8a90d77d9942"
+        },
+        {
+          "path": "NOTICE",
+          "bytes": 359,
+          "sha256": "323da85db96d02ed0cf48db889efa184037f538f002e868aeeff396ebb44a993"
+        },
+        {
+          "path": "README.md",
+          "bytes": 10546,
+          "sha256": "d54b7c14398af4f7e5202aa263232091e74279a59e7a567da011b0f4aa062f54"
+        }
+      ],
+      "originalLicenseNoticePreserved": true,
+      "children": [],
+      "relayRequired": false,
+      "newSharedCiPolicyCallerConformancePending": true,
+      "remoteAdmissionOrPublicPublicationClaimed": false,
+      "allDocumentsPreservedFromPrimaryNormalization": true,
+      "noChildWriters": true,
+      "packageMetadataFilesPreserved": true
+    },
+    "rollback": "Rollback per-acquisition composition and nullable cache-source host/types together with exact retained prior source receipt. Prior staged cached fallback is preserved evidence, not faithful acceptance. Original canonical source remains retained; no child cutover.",
+    "release": "EXPLICIT SOURCE-ONLY RELEASE: 360/main sole-writer lease returned to primary after physical seals. No further child writes/checks without renewal."
+  }
+}
