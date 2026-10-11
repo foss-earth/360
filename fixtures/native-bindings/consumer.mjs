@@ -1,0 +1,14 @@
+import assert from "node:assert/strict";
+import * as core from "@foss-earth/360";
+import * as globe from "@foss-earth/360/globe";
+import * as browser from "@foss-earth/360/globe-browser";
+import * as viewer from "@foss-earth/360/viewer";
+import * as resources from "@foss-earth/360/resources";
+assert.equal(typeof globalThis.document, "undefined");
+assert.equal(typeof globalThis.window, "undefined");
+assert.equal("createGlobeViewerNavigation" in core, false);
+for (const name of ["createGlobeViewerNavigation", "createGlobeViewerProjection", "createGlobeViewerFrameBinding", "createViewerSceneDescription"]) assert.equal(typeof globe[name], "function", name);
+assert.equal(typeof browser.createGlobeViewerInput, "function");
+assert.equal(typeof viewer.createImageViewer, "function");
+assert.equal(typeof resources.createViewerResources, "function");
+console.log("360 pure/optional public entries imported without creating a viewer/device/DOM session.");

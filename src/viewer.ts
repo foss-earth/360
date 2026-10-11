@@ -9,7 +9,7 @@ import { createLookModel, type LookModel, type LookSettings, type LookState } fr
 import { flightIn, flightOut, flightMotion, poseView, type Flight, type FlightPose } from "./flight.js";
 import { expansionTargetRadius, handoffReady, orbGeometry } from "./math.js";
 import { interpolateView } from "./views.js";
-import type { PublishedImageViewer, PreparedViewerImage, ViewerAbortSignal, ViewerImageInput, ViewerLook, ViewerNavigationPresentation, ViewerNavigationSnapshot, ViewerPosePorts, ViewerStatus, ViewerWorldMath } from "./ports.js";
+import type { SettledPublishedImageViewer, PreparedViewerImage, ViewerAbortSignal, ViewerImageInput, ViewerLook, ViewerNavigationPresentation, ViewerNavigationSnapshot, ViewerPosePorts, ViewerStatus, ViewerWorldMath } from "./ports.js";
 import type { ImmersionSource, OrbAppearance, PanoramaCameraFrame, PanoramaOrb, PanoramaRenderer } from "./renderer.js";
 
 export interface ViewerSource {
@@ -35,6 +35,7 @@ export interface ViewerResources {
   immersion(input: ViewerImageInput, view: LookState, failed: ReadonlySet<string>): ViewerSourceChoice | null;
   acquire(input: ViewerImageInput, choice: ViewerSourceChoice, options: { signal: AbortSignal; priority: number; overlap: boolean }): Promise<ViewerSource>;
   faceTexels(representation: ImageRepresentation): number;
+  whenSettled?(): Promise<void>;
 }
 export interface ViewerHeldPress { pointerId: number; button: number; clientX: number; clientY: number }
 export interface ViewerNavigationLease {
@@ -89,6 +90,9 @@ export interface ImageViewerOptions {
   requestRender(): void;
   holdRendering(): () => void;
   isOccluded(eye: Vec3, direction: Vec3, distance: number): boolean;
+  /** Host abort starts cancellation before borrowed device retirement. */
+  signal?: AbortSignal;
+  onRetirementError?(error: unknown): void;
   failure?(input: ViewerImageInput, kind: "preview" | "navigation" | "image", error: unknown): void;
 }
 interface Entry {
@@ -137,8 +141,29 @@ function snapshotInput(input: ViewerImageInput): ViewerImageInput {
   return Object.freeze({ ...input, asset: immutable(input.asset), pose: immutable(input.pose), placement: immutable(input.placement), credits: immutable(input.credits), ...(input.initialView ? { initialView: immutable(input.initialView) } : {}), ...(input.details ? { details: immutable(input.details) } : {}), actions: Object.freeze(actions) });
 }
 
-export function createImageViewer(options: ImageViewerOptions): PublishedImageViewer {
-  const { renderer, resources, navigation } = options;
+export function createImageViewer(options: ImageViewerOptions): SettledPublishedImageViewer {
+  const { renderer, navigation } = options;
+  const inFlight = new Set<Promise<unknown>>(), retirementErrors: unknown[] = [];
+  const track = <T>(work: Promise<T>): Promise<T> => {
+    inFlight.add(work);
+    void work.then(() => inFlight.delete(work), () => inFlight.delete(work));
+    return work;
+  };
+  const attempt = (actions: readonly (() => void)[], message: string): void => {
+    const errors: unknown[] = [];
+    for (const action of actions) { try { action(); } catch (error) { errors.push(error); } }
+    retirementErrors.push(...errors);
+    if (errors.length) throw new AggregateError(errors, message);
+  };
+  const retirementFailure = (error: unknown): void => {
+    retirementErrors.push(error);
+    try { options.onRetirementError?.(error); } catch (reporting) { retirementErrors.push(reporting); }
+  };
+  const resources: ViewerResources = {
+    warm: (...args) => options.resources.warm?.(...args) ?? null,
+    preview: (...args) => options.resources.preview(...args), immersion: (...args) => options.resources.immersion(...args),
+    faceTexels: record => options.resources.faceTexels(record), acquire: (...args) => track(options.resources.acquire(...args)),
+  };
   const handles = new WeakMap<PreparedViewerImage, Entry>();
   const prepared = new Set<Entry>();
   let entries = new Map<string, Entry>();
@@ -193,6 +218,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
       if (warming !== state || state.controller.signal.aborted || !live(entry) || source.isCurrent?.() === false) { source.release(); return; }
       state.source = source; options.requestRender();
     }, () => { if (warming === state) warming = null; });
+    track(work);
     void work.catch(() => {});
   }
   function takeWarmed(entry: Entry, choice: ViewerSourceChoice): ViewerSource | null {
@@ -218,17 +244,17 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
     if (!(ms > 0)) { step(1); return Promise.resolve(); }
     const release = lease ? lease.holdRendering() : options.holdRendering();
     const started = options.now();
-    return new Promise<void>((resolve, reject) => {
+    return track(new Promise<void>((resolve, reject) => {
       let finished = false;
       const finish = (): void => { if (finished) return; finished = true; frames.delete(tick); signal.removeEventListener("abort", abort); release(); };
-      const abort = (): void => { finish(); reject(signal.reason); };
+      const abort = (): void => { try { finish(); reject(signal.reason); } catch (error) { reject(new AggregateError([signal.reason, error], "Viewer animation cancellation failed.")); } };
       const tick = (): void => {
         if (signal.aborted) { abort(); return; }
         try { const t = Math.min(1, Math.max(0, (options.now() - started) / ms)); step(t); if (t >= 1) { finish(); resolve(); } }
         catch (error) { finish(); reject(error); }
       };
       signal.addEventListener("abort", abort, { once: true }); frames.add(tick); options.requestRender();
-    });
+    }));
   }
   function startOperation(signal?: ViewerAbortSignal): { controller: AbortController; stop(): void } {
     operation?.abort(new Error("Replaced by another navigation."));
@@ -253,7 +279,10 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
     if (entry.preview && !previewCurrent(entry)) { entry.preview.release(); entry.preview = null; entry.orb.update({ texture: null }); if (entry.visible) options.requestRender(); }
     const old = entry.preview;
     const work = Promise.resolve().then(() => resources.acquire(entry.input, choice, { signal: controller.signal, priority, overlap: !!old })).then(source => {
-      if (!live(entry) || controller.signal.aborted) { source.release(); return; }
+      if (!live(entry) || controller.signal.aborted) {
+        try { source.release(); } catch (error) { retirementFailure(error); }
+        return;
+      }
       entry.preview = source; entry.previewLimitation = choice.limitation; entry.previewError = null; entry.unneededSince = null;
       entry.orb.update({ texture: source.source.texture });
       // The immersive view can still hold the old preview while its orb sharpens.
@@ -270,7 +299,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
       entry.controller.signal.removeEventListener("abort", abort);
       if (entry.loading === work) { entry.loading = null; entry.loadingController = null; }
     });
-    entry.loading = work; return work;
+    entry.loading = work; return track(work);
   }
   async function ensurePreview(entry: Entry, signal: AbortSignal): Promise<ViewerSource> {
     signal.throwIfAborted();
@@ -327,12 +356,12 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
   }
   function teardown(state: Immersion, releaseShown = true): ViewerSource | null {
     if (immersion !== state) return null; immersion = null;
-    arrival?.abort(); arrival = null; state.refine?.abort(); state.detach(); state.stopLook(); state.offAbort();
-    renderer.immersion.show(null);
     const owned = state.shown !== state.entry.preview ? state.shown : null;
-    if (releaseShown) owned?.release();
-    if (releaseShown) { settlePreviewReplacements(state.entry); }
-    for (const entry of entries.values()) unfreeze(entry);
+    const pendingArrival = arrival; arrival = null;
+    attempt([() => pendingArrival?.abort(), () => state.refine?.abort(), state.detach, state.stopLook, state.offAbort,
+      () => renderer.immersion.show(null), () => { if (releaseShown) owned?.release(); },
+      () => { if (releaseShown) settlePreviewReplacements(state.entry); },
+      ...[...entries.values()].map(entry => () => unfreeze(entry))], "Viewer immersion cleanup failed.");
     return owned;
   }
   function startImmersion(entry: Entry, shown: ViewerSource, lease: ViewerNavigationLease, view: ViewerLook): Immersion {
@@ -392,7 +421,10 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
         return takeWarmed(entry, choice) ?? resources.acquire(entry.input, choice, { signal: controller.signal, priority: 10, overlap: true });
       } finally { stopWarming(entry); }
     }).then(async incoming => {
-      if (!current() || incoming.isCurrent?.() === false) { incoming.release(); return; }
+      if (!current() || incoming.isCurrent?.() === false) {
+        try { incoming.release(); } catch (error) { retirementFailure(error); }
+        return;
+      }
       const old = state.shown, candidate = { source: incoming, entry }; incomingSources.add(candidate);
       let published = false;
       const discard = (): void => {
@@ -400,7 +432,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
         for (const release of [() => { if (current() && phase === "immersive") renderer.immersion.show(state.shown.isCurrent?.() === false ? null : { source: sourceOf(state.entry, state.shown) }); }, () => incoming.release()]) {
           try { release(); } catch (error) { errors.push(error); }
         }
-        if (errors.length) throw new AggregateError(errors, "Private image refinement cleanup failed.");
+        if (errors.length) { retirementErrors.push(...errors); throw new AggregateError(errors, "Private image refinement cleanup failed."); }
       };
       try {
         if (incoming.source.kind === "tiles" && old.representation.role !== "preview") { state.refinePhase = "covering"; await awaitViewReady(incoming, entry, controller.signal); }
@@ -418,7 +450,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
           () => settlePreviewReplacements(state.entry), () => incoming.settleReplacement(), emit]) {
           try { release(); } catch (error) { errors.push(error); }
         }
-        if (errors.length) throw new AggregateError(errors, "Published image refinement cleanup failed.");
+        if (errors.length) { retirementErrors.push(...errors); throw new AggregateError(errors, "Published image refinement cleanup failed."); }
       } catch (error) {
         let failure = error;
         if (!published) { try { discard(); } catch (release) { failure = new AggregateError([error, release], "Image refinement failed."); } }
@@ -429,6 +461,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
       if (current()) { state.failed.add(choice.representation.id); report(entry, "image", error); }
     }).finally(() => { const owns = state.refine === controller; if (owns) { const loading = state.loading; state.refine = null; state.refinePhase = null; state.loading = null; if (loading && immersion === state) emit(); } if (state.refineWork === work) state.refineWork = null; if (owns && immersion === state && state.entry === entry && phase === "immersive" && state.failed.has(choice.representation.id)) refine(state); });
     state.refineWork = work;
+    track(work);
     void work.catch(() => {});
   }
   async function settleRefinement(state: Immersion): Promise<void> {
@@ -564,31 +597,47 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
     if (disposed) return; if (!immersion) { operation?.abort(new Error("Cancelled.")); return; }
     if (exiting) return;
     const leaving = immersion;
-    const work = leave(leaving).catch(error => { report(leaving.entry, "navigation", error); clearNavigation(); emit(); }).finally(() => { if (exiting === work) exiting = null; }); exiting = work;
+    const work = leave(leaving).catch(error => { report(leaving.entry, "navigation", error); clearNavigation(); emit(); }).finally(() => { if (exiting === work) exiting = null; }); exiting = work; track(work);
   }
   function clearNavigation(): void {
-    stopWarming();
-    operation?.abort(new Error("The image set changed.")); operation = null; stopFade(); resetHover();
-    // Remove the immersive lease abort callback before releasing an in-flight
-    // exit; otherwise it restores the overview after momentum handback.
     const active = immersion;
-    if (active) active.entry.orb.setExpansion(null);
-    if (active) teardown(active);
-    if (transition && !transition.lease.released) {
-      if (transition.flying) handBack(transition.lease, transition.flying, true, null);
-      else navigation.restore(transition.lease.overview, transition.lease);
-      transition.lease.release("cancelled"); transition = null;
-    }
-    if (active && !active.lease.released) { navigation.restore(active.lease.overview, active.lease); active.lease.release("cancelled"); }
-    phase = disposed ? "disposed" : "overview"; target = null;
+    attempt([
+      stopWarming, () => { operation?.abort(new Error("The image set changed.")); operation = null; }, stopFade, resetHover,
+      () => { if (active) active.entry.orb.setExpansion(null); }, () => { if (active) teardown(active); },
+      () => {
+        const current = transition;
+        if (!current || current.lease.released) return;
+        attempt([() => { if (current.flying) handBack(current.lease, current.flying, true, null);
+          else navigation.restore(current.lease.overview, current.lease); },
+          () => current.lease.release("cancelled"), () => { transition = null; }], "Viewer transition cleanup failed.");
+      },
+      () => { if (active && !active.lease.released) attempt([
+        () => navigation.restore(active.lease.overview, active.lease), () => active.lease.release("cancelled"),
+      ], "Viewer navigation cleanup failed."); },
+      () => { phase = disposed ? "disposed" : "overview"; target = null; },
+    ], "Viewer navigation retirement failed.");
   }
   function disposeEntry(entry: Entry): void {
     if (entry.disposed) return;
-    stopWarming(entry);
-    if (immersion?.entry === entry || (entry.visible && target === entry.input.id)) clearNavigation();
-    entry.disposed = true; entry.offExternal(); entry.controller.abort(new Error("The image was disposed.")); entry.loadingController?.abort(); entry.orb.setExpansion(null); entry.preview?.release(); entry.preview = null; settlePreviewReplacements(entry); entry.orb.dispose(); prepared.delete(entry);
-    if (entries.get(entry.input.id) === entry) entries.delete(entry.input.id);
+    const navigates = immersion?.entry === entry || (entry.visible && target === entry.input.id);
+    entry.disposed = true;
+    attempt([() => stopWarming(entry), () => { if (navigates) clearNavigation(); }, entry.offExternal,
+      () => entry.controller.abort(new Error("The image was disposed.")), () => entry.loadingController?.abort(),
+      () => entry.orb.setExpansion(null), () => { const source = entry.preview; entry.preview = null; source?.release(); },
+      () => settlePreviewReplacements(entry), () => entry.orb.dispose(), () => prepared.delete(entry),
+      () => { if (entries.get(entry.input.id) === entry) entries.delete(entry.input.id); },
+    ], "Viewer prepared-image cleanup failed.");
   }
+  const dispose = (): void => {
+    if (disposed) return;
+    disposed = true;
+    attempt([clearNavigation, ...[...prepared].map(entry => () => disposeEntry(entry)),
+      () => entries.clear(), () => frames.clear(), emit, () => listeners.clear(),
+      () => options.signal?.removeEventListener("abort", aborted)], "Viewer disposal failed.");
+  };
+  const aborted = (): void => { try { dispose(); } catch (error) { retirementFailure(error); } };
+  options.signal?.addEventListener("abort", aborted, { once: true });
+  if (options.signal?.aborted) aborted();
   return {
     async prepare(input, external) {
       if (disposed) throw new Error("The image viewer is disposed.");
@@ -597,7 +646,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
       const controller = options.createAbortController(); const drawId = `viewer-${++serial}:${input.id}`;
       const orb = renderer.addOrb(drawId, { ...input.placement, texture: null, visible: false, displayScale: 1 });
       const entry: Entry = { input, drawId, orb, controller, visible: false, disposed: false, preview: null, previewLimitation: null, loading: null, loadingController: null, previewError: null, failedSharper: null, unneededSince: null, frozenPlacement: null, pendingPlacement: null, hover: 0, offExternal: () => external.removeEventListener("abort", abort), pendingSettlements: new Set() };
-      prepared.add(entry); const abort = (): void => disposeEntry(entry); external.addEventListener("abort", abort, { once: true });
+      prepared.add(entry); const abort = (): void => { try { disposeEntry(entry); } catch (error) { retirementFailure(error); } }; external.addEventListener("abort", abort, { once: true });
       const handle: PreparedViewerImage = { id: input.id,
         ready: async () => { if (!live(entry)) throw new Error("The image was disposed."); if (!renderer.available) throw new Error(renderer.unavailableReason ?? "Images cannot be drawn here."); if (!previewCurrent(entry)) await loadPreview(entry, 1); if (!live(entry) || !previewCurrent(entry)) throw entry.previewError ?? new Error("The image preview is unavailable."); },
         updatePlacement(placement) { if (!live(entry)) return; const next = immutable(placement); if (entry.frozenPlacement) entry.pendingPlacement = next; else applyPlacement(entry, next); },
@@ -616,7 +665,7 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
       for (const entry of entries.values()) { entry.visible = true; entry.orb.update({ visible: true }); if (renderer.available) void loadPreview(entry, 1).catch(() => {}); }
       options.requestRender(); emit();
     },
-    enter, exit, status, describeImage(id) { return entries.get(id)?.input ?? null; },
+    enter: (...args) => track(enter(...args)), exit, status, describeImage(id) { return entries.get(id)?.input ?? null; },
     isPlacementFrozen(id) {
       const entry = entries.get(id);
       return !!entry && entry.visible && live(entry) && entry.frozenPlacement !== null;
@@ -685,6 +734,12 @@ export function createImageViewer(options: ImageViewerOptions): PublishedImageVi
       if (camera && immersion && !immersion.leaving) { const before = JSON.stringify(immersion.shown.detail?.()); if (immersion.shown.onFrame?.(camera, frame.now, immersion.entry.input.placement.content)) options.requestRender(); if (JSON.stringify(immersion.shown.detail?.()) !== before) emit(); refine(immersion); }
       return frames.size > 0 || hovering;
     },
-    dispose() { if (disposed) return; disposed = true; clearNavigation(); for (const entry of [...prepared]) disposeEntry(entry); entries.clear(); frames.clear(); emit(); listeners.clear(); },
+    dispose,
+    async whenSettled() {
+      while (inFlight.size) await Promise.allSettled([...inFlight]);
+      const results = await Promise.allSettled([options.resources.whenSettled?.()]);
+      for (const result of results) if (result.status === "rejected") retirementErrors.push(result.reason);
+      if (retirementErrors.length) throw new AggregateError(retirementErrors, "Viewer retirement failed.");
+    },
   };
 }

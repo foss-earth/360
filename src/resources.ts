@@ -48,7 +48,7 @@ export interface ViewerResourceCompositionPorts {
   previewForTiles?(input:ViewerImageInput,representation:TiledCubeRepresentationRecord):{
     asset:{id:string;revision:string};representation:string;
   }|null;
-  uploader:ImageTextureUploader;
+  uploader:ImageTextureUploader & { whenSettled?(): Promise<void> };
   /** Host renderer device adapter shares the same transfer tracker and frame. */
   atlasDevice:ImageRegionDevicePorts;
   sheets?:PreviewSheetSources;
@@ -64,11 +64,24 @@ export interface ViewerResourceCompositionPorts {
   /** Optional test/device binding; production defaults to the public tiled owner adapter. */
   createAtlas?(options:Parameters<typeof createPanoramaTileAtlas>[0]):PanoramaTileAtlas;
 }
+export interface SettledViewerResources extends ViewerResources {
+  retire(): void;
+  whenSettled(): Promise<void>;
+}
 /** No renderer, broker, uploader, timer or frame subscription is constructed here. */
-export function createViewerResources(ports:ViewerResourceCompositionPorts):ViewerResources {
+export function createViewerResources(ports:ViewerResourceCompositionPorts):SettledViewerResources {
+  let retired = false;
+  const pending = new Set<Promise<unknown>>(), scopes = new Set<ImageOperationScope>(), retirementErrors: unknown[] = [];
+  const track = <T>(work: Promise<T>): Promise<T> => {
+    pending.add(work); void work.then(() => pending.delete(work), () => pending.delete(work)); return work;
+  };
+  const trackedFiles = (files: ImageFileService): ImageFileService => ({
+    obtain: (...args) => track(files.obtain(...args)), decode: (...args) => track(files.decode(...args)),
+    ...(files.obtainInferred ? { obtainInferred: (...args: Parameters<NonNullable<ImageFileService["obtainInferred"]>>) => track(files.obtainInferred!(...args)) } : {}),
+  });
   const attempt=(actions:readonly (()=>void)[],primary:readonly unknown[]=[],label="Image source cleanup failed."):void=>{
     const errors=[...primary];
-    for(const action of actions){try{action();}catch(error){errors.push(error);}}
+    for(const action of actions){try{action();}catch(error){errors.push(error);retirementErrors.push(error);}}
     if(errors.length)throw errors.length===1?errors[0]:new AggregateError(errors,label);
   };
   const keyFor=(input:ViewerImageInput,record:ImageRepresentation):string=>{
@@ -78,6 +91,7 @@ export function createViewerResources(ports:ViewerResourceCompositionPorts):View
   };
   const keyed=(input:ViewerImageInput,choice:ViewerSourceChoice|null):ViewerSourceChoice|null=>choice?{...choice,key:keyFor(input,choice.representation)}:null;
   async function acquire(input:ViewerImageInput,choice:ViewerSourceChoice,request:{signal:AbortSignal;priority:number;overlap:boolean}):Promise<ViewerSource> {
+    if (retired) throw new Error("The viewer resource binding has retired.");
     request.signal.throwIfAborted();
     const record=choice.representation,estimate=ports.estimate(record);
     const layout=record.projection==="tiled-cube"?tileAtlasLayout(record as TiledCubeRepresentationRecord,ports.tiles.memoryBytes(),ports.maxTextureSide()):null;
@@ -92,7 +106,7 @@ export function createViewerResources(ports:ViewerResourceCompositionPorts):View
       preview??=input.asset.representations.find((candidate):candidate is CubeRepresentationRecord=>candidate.role==="preview"&&candidate.projection==="cube");
       if(!preview)throw new Error("A tiled image needs a complete cube preview.");
     }
-    const pending=ports.cache.acquire(key,{...request,estimatedGpuBytes:estimate.sourceGpu,load:(scope,loadRequest)=>load(input,record,scope,loadRequest,layout)});
+    const pending=ports.cache.acquire(key,{...request,estimatedGpuBytes:estimate.sourceGpu,load:(scope,loadRequest)=>track(load(input,record,scope,loadRequest,layout))});
     let held:ImageSourceHold<ComposedImageSource>,fallback:ViewerSource|null=null;
     if(preview){
       // Atlas and fallback are independent common-cache sources. Each caller
@@ -128,7 +142,11 @@ export function createViewerResources(ports:ViewerResourceCompositionPorts):View
     };
   }
   async function load(input:ViewerImageInput,record:ImageRepresentation,scope:ImageOperationScope,request:ImageSourceRequest,layout:TileAtlasLayout|null):Promise<ComposedImageSource> {
-    const files=ports.filesFor?.(input,record)??ports.files;
+    if (retired) throw new Error("The viewer resource binding has retired.");
+    scopes.add(scope);
+    const ended = (): void => { scopes.delete(scope); scope.signal.removeEventListener("abort", ended); };
+    scope.signal.addEventListener("abort", ended, { once: true });
+    const files=trackedFiles(ports.filesFor?.(input,record)??ports.files);
     const whole:WholeImagePorts<UploadedImageTexture>={broker:ports.broker,scope,overlap:request.overlap,maxTextureSide:ports.maxTextureSide(),obtain:(file,bytes)=>files.obtain(file,bytes,scope,undefined,request.priority),decode:(body,file)=>files.decode(body,file,scope,request.priority),whenReady:(uploaded,signal)=>ports.whenReady(uploaded.texture,signal)};
     if(record.projection==="cube") {
       const cube=record as CubeRepresentationRecord & {sheet?:ResolvedSheetPlace};
@@ -157,5 +175,17 @@ export function createViewerResources(ports:ViewerResourceCompositionPorts):View
         onFrame(camera,content,now){if(disposed)return false;tiles.outlines=ports.tiles.outlines();tiled!.setLimits(ports.tiles.limits());const fov=Math.tan(camera.view.verticalFovRad/2);return tiled!.tick(now,{forward:mulMat3(content,camera.view.forward),right:mulMat3(content,camera.view.right),up:mulMat3(content,camera.view.up),tanHalfWidth:fov*camera.view.aspect,tanHalfHeight:fov,heightPx:camera.viewportHeightCssPx*ports.devicePixelsPerCss()},ports.tiles.selection(record as TiledCubeRepresentationRecord));}};
     } catch(error){attempt([dispose],[error],"Tiled atlas preparation and cleanup failed.");throw error;}
   }
-  return {warm:(input,view)=>keyed(input,ports.choice.warm?.(input,view)??null),preview:(input,diameter)=>keyed(input,ports.choice.preview(input,diameter)),immersion:(input,view,failed)=>keyed(input,ports.choice.immersion(input,view,failed)),faceTexels:record=>ports.choice.faceTexels(record),acquire};
+  return {warm:(input,view)=>keyed(input,ports.choice.warm?.(input,view)??null),preview:(input,diameter)=>keyed(input,ports.choice.preview(input,diameter)),immersion:(input,view,failed)=>keyed(input,ports.choice.immersion(input,view,failed)),faceTexels:record=>ports.choice.faceTexels(record),acquire: (...args) => track(acquire(...args)),
+    retire() {
+      if (retired) return; retired = true;
+      for (const scope of [...scopes]) { try { scope.dispose(); } catch (error) { retirementErrors.push(error); } }
+      if (retirementErrors.length) throw new AggregateError(retirementErrors, "Viewer resource cleanup failed.");
+    },
+    async whenSettled() {
+      while (pending.size) await Promise.allSettled([...pending]);
+      const results = await Promise.allSettled([ports.uploader.whenSettled?.()]);
+      for (const result of results) if (result.status === "rejected") retirementErrors.push(result.reason);
+      if (retirementErrors.length) throw new AggregateError(retirementErrors, "Viewer resource retirement failed.");
+    },
+  };
 }

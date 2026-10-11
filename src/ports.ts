@@ -110,3 +110,6 @@ export interface ViewerResourceReadings {
 /** The supplied factory adds readings without requiring legacy structural
  * ImageViewer implementations to invent resource observations. */
 export type PublishedImageViewer = ImageViewer & ViewerResourceReadings;
+
+/** Factory observation: disposal cancels; settlement waits actual asynchronous work. */
+export interface SettledPublishedImageViewer extends PublishedImageViewer { whenSettled(): Promise<void> }
