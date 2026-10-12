@@ -3,8 +3,9 @@ import { createWheelGestureClassifier, type NavigationLease } from "@foss-earth/
 import { isSafariGestureSupported, watchWheelGestures } from "@foss-earth/engine/browser";
 import type { GlobeRuntime } from "@foss-earth/engine/babylon";
 import { attachLookInput } from "./browserInput.js";
-import type { ViewerHeldPress, ViewerInputPorts, ViewerNavigationLease } from "./viewer.js";
+import type { ViewerHeldPress, ViewerHeldTouch, ViewerInputPorts, ViewerNavigationLease } from "./viewer.js";
 
+const TOUCH_EVENTS = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
 const attemptCleanup = (actions: readonly (() => void)[], message: string): void => {
   const errors: unknown[] = [];
   for (const action of actions) { try { action(); } catch (error) { errors.push(error); } }
@@ -25,6 +26,8 @@ export function createGlobeViewerInput(
   const hostWindow = canvas.ownerDocument.defaultView;
   if (!hostWindow) throw new Error("Scene input needs the canvas Window.");
   const wheels = watchWheelGestures(canvas, { window: hostWindow, nowMs });
+  // Whether a finger's pointer events come with touch events, as the globe's own touch input needs.
+  const touchEvents = "ontouchstart" in hostWindow;
   const input: ViewerInputPorts = {
     attach({ model, lease, requestFrame, userInput, exit }) {
       current();
@@ -59,11 +62,20 @@ export function createGlobeViewerInput(
     cancelOnInput(controller) {
       current();
       let held: ViewerHeldPress | null = null;
+      // The fingers down since one landed, where they are now: the globe carries them on as the gesture they are.
+      let touches: ViewerHeldTouch[] | null = null;
       const cancel = () => controller.abort(ports.abortReason());
       const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); cancel(); } };
       const onPress = (event: PointerEvent) => {
         if (event.pointerType === "mouse") held = { pointerId: event.pointerId, button: event.button, clientX: event.clientX, clientY: event.clientY };
+        // Its touch event, which comes next and says which finger it is, stops the flight.
+        else if (event.pointerType === "touch" && touchEvents) return;
         cancel();
+      };
+      const onTouch = (event: TouchEvent) => {
+        if (event.type !== "touchstart" && touches === null) return;
+        touches = Array.from(event.touches, touch => ({ identifier: touch.identifier, clientX: touch.clientX, clientY: touch.clientY }));
+        if (event.type === "touchstart") cancel();
       };
       const onWheel = () => { if (wheels.begins()) cancel(); };
       let stopped = false;
@@ -74,19 +86,21 @@ export function createGlobeViewerInput(
         attemptCleanup([
           () => hostWindow.removeEventListener("keydown", onKey),
           () => canvas.removeEventListener("pointerdown", onPress),
+          ...TOUCH_EVENTS.map(type => () => canvas.removeEventListener(type, onTouch)),
           () => canvas.removeEventListener("wheel", onWheel),
         ], "Scene input cancellation cleanup failed.");
       };
       try {
         hostWindow.addEventListener("keydown", onKey);
         canvas.addEventListener("pointerdown", onPress);
+        for (const type of TOUCH_EVENTS) canvas.addEventListener(type, onTouch, { passive: true });
         canvas.addEventListener("wheel", onWheel, { passive: true });
       } catch (error) {
         try { stop(); } catch (cleanup) { throw new AggregateError([error, cleanup], "Viewer input setup failed."); }
         throw error;
       }
       releases.add(stop);
-      return { press: () => held, stop };
+      return { press: () => held, touches: () => touches, stop };
     },
   };
   const dispose = (): void => {

@@ -38,6 +38,8 @@ export interface ViewerResources {
   whenSettled?(): Promise<void>;
 }
 export interface ViewerHeldPress { pointerId: number; button: number; clientX: number; clientY: number }
+/** A finger down on the map, by its touch identifier, and where it is now. */
+export interface ViewerHeldTouch { identifier: number; clientX: number; clientY: number }
 export interface ViewerNavigationLease {
   readonly overview: ViewerNavigationSnapshot;
   readonly signal: AbortSignal;
@@ -52,7 +54,7 @@ export interface ViewerNavigationPorts {
   restore(snapshot: ViewerNavigationSnapshot, lease?: ViewerNavigationLease): void;
   /** Must preserve position/velocity and continue the interrupting person's gesture. */
   glide(lease: ViewerNavigationLease, pose: ViewerNavigationPresentation, marker: Vec3, motion: {
-    velocity: Vec3; turn: Vec3; fovRad: number; inputSince: number; press: ViewerHeldPress | null;
+    velocity: Vec3; turn: Vec3; fovRad: number; inputSince: number; press: ViewerHeldPress | null; touches?: readonly ViewerHeldTouch[] | null;
   }): void;
   /** The one host camera.inertiaDecay value, as a 60 Hz retained fraction. */
   inertiaDecay(): number;
@@ -60,7 +62,7 @@ export interface ViewerNavigationPorts {
 }
 export interface ViewerInputPorts {
   /** Host classifies fresh input; preceding wheel/trackpad momentum must not cancel. */
-  cancelOnInput(controller: AbortController): { stop(): void; press(): ViewerHeldPress | null };
+  cancelOnInput(controller: AbortController): { stop(): void; press(): ViewerHeldPress | null; touches?(): readonly ViewerHeldTouch[] | null };
   attach(options: { model: LookModel; lease: ViewerNavigationLease; requestFrame(): void; userInput(): void; exit(): void }): { detach(): void };
 }
 export interface ViewerSettings {
@@ -325,14 +327,14 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     const fov = authored?.verticalFovDeg ?? options.settings().entryFovDeg ?? incoming.verticalFovDeg;
     return { ...(authored ?? { ...incoming, pitchDeg: 0 }), rollDeg: 0, verticalFovDeg: Math.min(range.max, Math.max(range.min, fov)) };
   }
-  function handBack(lease: ViewerNavigationLease, flying: Flying, moving: boolean, press: ViewerHeldPress | null): void {
+  function handBack(lease: ViewerNavigationLease, flying: Flying, moving: boolean, press: ViewerHeldPress | null, touches: readonly ViewerHeldTouch[] | null = null): void {
     const { flight, marker, t } = flying; const s = smooth(t); const current = flight.pose(s);
     let { velocity, turn } = moving ? flightMotion(flight, s, (6 * t * (1 - t) * 1000) / flying.durationMs) : { velocity: [0, 0, 0] as Vec3, turn: [0, 0, 0] as Vec3 };
     const toMarker = sub(marker, current.position); const gap = length(toMarker) - flight.radiusMeters;
     const inward = dot(velocity, toMarker) / Math.max(1e-9, length(toMarker)); const keep = navigation.inertiaDecay();
     const travel = keep < 1 ? (inward / 60) / (1 - keep) : Number.POSITIVE_INFINITY;
     if (travel > 0 && travel > Math.max(0, gap)) { const share = Math.max(0, gap) / travel; velocity = scale(velocity, share); turn = scale(turn, share); }
-    navigation.glide(lease, presented(current), marker, { velocity, turn, fovRad: lease.overview.camera.fov, inputSince: flying.startedMs, press });
+    navigation.glide(lease, presented(current), marker, { velocity, turn, fovRad: lease.overview.camera.fov, inputSince: flying.startedMs, press, touches });
   }
   function stopFade(): void { fading?.stop(); fading = null; }
   function fadeSphere(entry: Entry, flying: Flying, done: () => void): void {
@@ -553,7 +555,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
       const replaced = operation !== op.controller || !entry.visible;
       if (lease && !lease.released && !immersion) {
         renderer.immersion.show(null);
-        if (flying && !disposed) { handBack(lease, flying, true, input.press()); if (!replaced) fadeSphere(entry, flying, () => {}); }
+        if (flying && !disposed) { handBack(lease, flying, true, input.press(), input.touches?.() ?? null); if (!replaced) fadeSphere(entry, flying, () => {}); }
         else navigation.restore(lease.overview, lease);
         lease.release("cancelled");
       }
@@ -589,7 +591,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     finally { input.stop(); state.lease.signal.removeEventListener("abort", abort); if (transition?.lease === state.lease) transition = null; }
     if (immersion !== state) { op.stop(); return; }
     const handed = !!flying && cut && !disposed && !state.lease.released;
-    if (flying && handed) handBack(state.lease, flying, true, input.press());
+    if (flying && handed) handBack(state.lease, flying, true, input.press(), input.touches?.() ?? null);
     else { entry.orb.setExpansion(null); if (flight) navigation.restore(flight.end, state.lease); }
     const shown = teardown(state, !handed); state.lease.release("exit");
     if (flying && handed) fadeSphere(entry, flying, () => { shown?.release(); settlePreviewReplacements(entry); });
