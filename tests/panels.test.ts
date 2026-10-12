@@ -4,13 +4,16 @@ import { createViewerTabs } from "../src/panels.js";
 import type { ViewerStatus } from "../src/index.js";
 import { image } from "./fixtures/viewer.js";
 describe("host-composed image tabs",()=>{
-  it("shows injected identity/credits/actions and tears down every host section",()=>{
+  it("shows the authored description and actions while retaining metadata, and tears down every host section",()=>{
     let state:ViewerStatus={phase:"overview",active:null,target:null};let listener:(s:ViewerStatus)=>void=()=>{};
-    const off=vi.fn(),destroy=vi.fn(),exit=vi.fn(),activateAction=vi.fn(async()=>true),input=image();input.credits.url="javascript:alert(1)";input.actions=[{id:"next",label:"Next view",activate:()=>true}];
+    const off=vi.fn(),destroy=vi.fn(),exit=vi.fn(),activateAction=vi.fn(async()=>true),input=image();input.description="A view from campus.";input.credits.url="https://example.com/source";input.details={capture:{latitudeDeg:44.978552,longitudeDeg:-93.239638,heightMeters:null,horizontalAccuracyMeters:50},groups:["Campus tour"]};input.pose.aligned=false;input.actions=[{id:"next",label:"Next view",activate:()=>true}];
+    const metadata=structuredClone({asset:input.asset,credits:input.credits,details:input.details,pose:input.pose});
     const tabs=createViewerTabs({document,viewer:{status:()=>state,subscribe(fn){listener=fn;fn(state);return off;},exit,activateAction},image:()=>input,sectionTitle:(_tab,section)=>section,parameterSection({main}){const element=document.createElement("div");if(main)element.append(main);return{element,destroy};},sections(entries){const element=document.createElement("div");element.append(...entries.map(entry=>entry.element));return{element,destroy};},representationText:r=>r.id,detail:()=>({shown:"the test image"})});
     state={phase:"immersive",active:"a",target:null};listener(state);expect(tabs.getSnapshot()).toEqual({title:"360: Image a",onScreen:true});
-    expect(tabs.panorama.textContent).toContain("Fixture photographer");expect(tabs.panorama.querySelector("a")).toBeNull();
+    expect(tabs.panorama.querySelector(".foss-earth-panorama-photograph")?.textContent).toBe("A view from campus.In Campus tour.");expect(tabs.panorama.querySelector("a")).toBeNull();
+    expect({asset:input.asset,credits:input.credits,details:input.details,pose:input.pose}).toEqual(metadata);
     tabs.panorama.querySelector<HTMLButtonElement>("button")!.click();expect(activateAction).toHaveBeenCalledWith("next");tabs.leave();expect(exit).toHaveBeenCalledOnce();
-    tabs.destroy();tabs.destroy();expect(off).toHaveBeenCalledOnce();expect(destroy).toHaveBeenCalledTimes(8);listener({phase:"overview",active:null,target:null});expect(tabs.getSnapshot().title).toBe("360: Image a");
+    expect(tabs.panorama.firstElementChild?.classList.contains("foss-earth-panorama-photograph")).toBe(true);
+    tabs.destroy();tabs.destroy();expect(off).toHaveBeenCalledOnce();expect(destroy).toHaveBeenCalledTimes(7);listener({phase:"overview",active:null,target:null});expect(tabs.getSnapshot().title).toBe("360: Image a");
   });
 });

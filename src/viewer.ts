@@ -67,6 +67,8 @@ export interface ViewerSettings {
   appearance: OrbAppearance;
   look: LookSettings;
   entryOrientation: "authored" | "geographic";
+  /** The vertical FOV, deg, a panorama entered from the map opens at, within the look's range; null or absent keeps the camera's. */
+  entryFovDeg?: number | null;
   flightDurationMs: number;
   expandDurationMs: number;
   fadeDurationMs: number;
@@ -320,8 +322,8 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
   function arrivalFor(entry: Entry, incoming: ViewerLook, explicit?: LookState): ViewerLook {
     const range = options.settings().look.fovRangeDeg;
     const authored = explicit ?? (options.settings().entryOrientation === "authored" ? entry.input.initialView : undefined);
-    return { ...(authored ?? { ...incoming, pitchDeg: 0 }), rollDeg: 0,
-      verticalFovDeg: Math.min(range.max, Math.max(range.min, (authored ?? incoming).verticalFovDeg)) };
+    const fov = authored?.verticalFovDeg ?? options.settings().entryFovDeg ?? incoming.verticalFovDeg;
+    return { ...(authored ?? { ...incoming, pitchDeg: 0 }), rollDeg: 0, verticalFovDeg: Math.min(range.max, Math.max(range.min, fov)) };
   }
   function handBack(lease: ViewerNavigationLease, flying: Flying, moving: boolean, press: ViewerHeldPress | null): void {
     const { flight, marker, t } = flying; const s = smooth(t); const current = flight.pose(s);

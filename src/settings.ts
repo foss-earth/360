@@ -243,8 +243,8 @@ const PANORAMA_SETTINGS: readonly ParameterSpec[] = [
   },
   {
     id: "scene.panorama.verticalFovRange", label: "Zoom range", description: "The narrowest and widest vertical view inside a panorama.",
-    unit: "deg", kind: "range", bounds: () => ({ min: 20, max: 120, reason: "Beyond these a flat view distorts or magnifies past any source." }), step: 1,
-    default: { min: 35, max: 90 }, defaultReason: "A prototype look range.",
+    unit: "deg", kind: "range", bounds: () => ({ min: 10, max: 179, reason: "A flat view cannot show 180°, which scene views and history reject, and below 10° it magnifies past most sources." }), step: 1,
+    default: { min: 20, max: 120 }, defaultReason: "As asked: close enough at 20° to look at detail, wide enough at 120° to take in most of the scene at once.",
     home: { tab: PANORAMA_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: INPUT,
   },
   {
@@ -292,9 +292,16 @@ const PANORAMA_SETTINGS: readonly ParameterSpec[] = [
     default: "level-current", defaultReason: "Keeps your bearing; a scene's view may be applied from the list.",
     home: { tab: PANORAMA_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
   },
+  {
+    id: "scene.panorama.entryFov", label: "Field of view",
+    description: "How much of a panorama you see, top to bottom, once you have entered it from the map, within the zoom range. The map's keeps the field of view the map had; the scene's view, when chosen above, brings its own.",
+    unit: "deg", kind: "number", named: [{ id: "map", label: "The map's" }], bounds: () => ({ min: 10, max: 179 }), step: 1, scale: "linear",
+    default: 100, defaultReason: "As asked: wide enough to see where you are as soon as you arrive.",
+    home: { tab: PANORAMA_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
+  },
   quantity({
     id: "scene.panorama.orientDuration", label: "Levelling", unit: "ms", min: 0, max: 2000, fallback: 250, step: 10, tab: PANORAMA_SETTINGS_TAB, section: "entering",
-    description: "How long the view takes to level or turn after entering.", reason: "A separate, short levelling phase.", source: LOADER,
+    description: "How long the view takes to level, turn or zoom to its field of view after entering.", reason: "A separate, short levelling phase.", source: LOADER,
   }),
 ];
 

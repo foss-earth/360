@@ -37,12 +37,12 @@ export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
   const button = (text:string, action:()=>void) => { const item=el("button","foss-earth-choice foss-earth-scene-button",text);item.type="button";item.addEventListener("click",action);return item; };
   const photograph=el("div","foss-earth-choices foss-earth-panorama-photograph"), links=el("div","foss-earth-choices"), detail=el("div","foss-earth-choices");
   const section = (tab:string,id:string,main?:HTMLElement,showAll=true) => {const result=ports.parameterSection({tab,section:id,showAll,...(main?{main}:{})});handles.push(result);return result.element;};
-  const panorama=ports.sections([
-    {id:"panorama.photograph",title:ports.sectionTitle(PANORAMA_TAB,"photograph"),element:section(PANORAMA_TAB,"photograph",photograph,false),defaultOpen:true},
-    {id:"panorama.links",title:ports.sectionTitle(PANORAMA_TAB,"links"),element:section(PANORAMA_TAB,"links",links,false),defaultOpen:true},
-    {id:"panorama.detail",title:ports.sectionTitle(PANORAMA_TAB,"detail"),element:section(PANORAMA_TAB,"detail",detail),defaultOpen:true},
+  const panoramaSections=ports.sections([
+    {id:"panorama.links",title:ports.sectionTitle(PANORAMA_TAB,"links"),element:section(PANORAMA_TAB,"links",links,false),defaultOpen:false},
+    {id:"panorama.detail",title:ports.sectionTitle(PANORAMA_TAB,"detail"),element:section(PANORAMA_TAB,"detail",detail),defaultOpen:false},
   ]);
-  panorama.element.classList.add("foss-earth-panorama-tab");
+  const panorama=el("div","foss-earth-panorama-tab");
+  panorama.append(photograph,panoramaSections.element);
   const settings=ports.sections(["image","looking","entering"].map(id=>({id:`panorama-settings.${id}`,title:ports.sectionTitle(PANORAMA_SETTINGS_TAB,id),element:section(PANORAMA_SETTINGS_TAB,id),defaultOpen:id==="image"})));
   function render(status:ViewerStatus):void {
     if(disposed)return;
@@ -53,15 +53,8 @@ export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
     if(key===rendered)return;rendered=key;
     photograph.replaceChildren();links.replaceChildren();detail.replaceChildren();if(!entry)return;
     const inside=status.phase==="immersive"&&status.active===entry.id;
-    photograph.append(el("div","foss-earth-choices__heading",entry.title));if(entry.description)photograph.append(note(entry.description));
+    if(entry.description)photograph.append(note(entry.description));
     if(entry.details?.groups?.length)photograph.append(note(`In ${listed(entry.details.groups)}.`));
-    const capture=entry.details?.capture;
-    if(capture){const accuracy=capture.horizontalAccuracyMeters===null?", with no accuracy given":`, to within ${capture.horizontalAccuracyMeters} m`;const height=capture.heightMeters===null?"Its height is not known.":`${capture.heightMeters.toFixed(1)} m above the WGS84 ellipsoid.`;photograph.append(note(`Taken at ${capture.latitudeDeg.toFixed(6)}°, ${capture.longitudeDeg.toFixed(6)}°${accuracy}. ${height}`));}
-    const pose=entry.pose,north=pose.aligned===true?"North is set: the heading was measured against true north.":pose.aligned===false?"North is not set: the image faces an arbitrary direction, so bearings in it are not compass bearings.":"The scene does not say whether its north is set.";
-    photograph.append(note(`Pose: heading ${pose.headingDeg.toFixed(1)}°, pitch ${pose.pitchDeg.toFixed(1)}°, roll ${pose.rollDeg.toFixed(1)}°. ${north}`));
-    const credit=note(entry.credits.text);if(entry.credits.license)credit.append(` · ${entry.credits.license}`);
-    if(entry.credits.url){let url:URL|null=null;try{url=new URL(entry.credits.url);}catch{/* Plain credit remains visible. */}if(url&&["https:","http:"].includes(url.protocol)&&!url.username&&!url.password){const link=el("a","foss-earth-scene-credit-link","source");link.href=url.href;link.target="_blank";link.rel="noopener noreferrer";const icon=ports.externalLinkIcon?.();if(icon)link.append(icon);credit.append(" · ",link);}}
-    photograph.append(credit,note(inside?"Close this tab, or press Escape, to go back to the map.":"Entering. Close this tab, or press Escape, to stay on the map."));
     if(!entry.actions.length)links.append(note("No links lead from this panorama."));
     for(const action of entry.actions){const go=button(action.label,()=>{if(!disposed)void ports.viewer.activateAction(action.id);});go.disabled=!inside;links.append(go);}
     if(!reading?.shown||!inside)detail.append(note("Entering: the preview shows first, then the largest image the detail allows."));
@@ -70,5 +63,5 @@ export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
     if(ports.openSettings)detail.append(note("Representation, sharpness, looking and levelling:"),button("360 image settings",()=>{if(!disposed)ports.openSettings?.();}));
   }
   const off=ports.viewer.subscribe(render);render(ports.viewer.status());
-  return {panorama:panorama.element,settings:settings.element,getSnapshot:()=>snapshot,subscribe(listener){if(!disposed)listeners.add(listener);return()=>{listeners.delete(listener);};},leave(){if(!disposed)ports.viewer.exit();},destroy(){if(disposed)return;disposed=true;off();listeners.clear();for(const handle of handles)handle.destroy();panorama.destroy();settings.destroy();}};
+  return {panorama,settings:settings.element,getSnapshot:()=>snapshot,subscribe(listener){if(!disposed)listeners.add(listener);return()=>{listeners.delete(listener);};},leave(){if(!disposed)ports.viewer.exit();},destroy(){if(disposed)return;disposed=true;off();listeners.clear();for(const handle of handles)handle.destroy();panoramaSections.destroy();panorama.remove();settings.destroy();}};
 }

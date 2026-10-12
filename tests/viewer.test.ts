@@ -170,4 +170,18 @@ describe("injected viewer lifecycle", () => {
     covered = true; await f.advance(5); expect(f.viewer.status().immersionDetail?.representation).toBe("tiles"); expect(whole.release).toHaveBeenCalledTimes(1);
     expect(tiles.settleReplacement).toHaveBeenCalledTimes(1); f.viewer.dispose(); expect(f.holds.active).toBe(0);
   });
+  it("opens at the field of view the settings ask for within the zoom range, the map's when there is none, and the scene's own view as it is", async () => {
+    const f = fixture(), controller = new AbortController();
+    const handles = await Promise.all([image("a"), { ...image("b"), initialView: { headingDeg: 30, pitchDeg: 5, verticalFovDeg: 50 } }].map(input => f.viewer.prepare(input, controller.signal)));
+    await Promise.all(handles.map(handle => handle.ready())); f.viewer.replaceImages(handles);
+    const enterAt = async (id: string, entryFovDeg: number | null | undefined): Promise<number | undefined> => {
+      f.settings.entryFovDeg = entryFovDeg; expect(await f.viewer.enter(id)).toBe(true); await flush();
+      const fov = f.viewer.status().view?.verticalFovDeg; f.viewer.exit(); await flush(); return fov;
+    };
+    // The map's camera comes in at 60°; the zoom range is 35° to 90°.
+    expect(await enterAt("a", 80)).toBe(80); expect(await enterAt("a", 100)).toBe(90); expect(await enterAt("a", 20)).toBe(35);
+    expect(await enterAt("a", null)).toBe(60); expect(await enterAt("a", undefined)).toBe(60);
+    f.settings.entryOrientation = "authored"; expect(await enterAt("b", 100)).toBe(50); expect(await enterAt("a", 100)).toBe(90);
+    f.viewer.dispose(); expect(f.holds.active).toBe(0);
+  });
 });
