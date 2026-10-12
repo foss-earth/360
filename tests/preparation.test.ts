@@ -15,7 +15,7 @@ describe("public preparation orchestration",()=>{
     expect(result.exitCode).toBe(0);expect(result.out).toContain(path.join(owner,"build/prepared-scenes"));expect(result.fragment?.imagePose).toEqual({headingDeg:37,pitchDeg:-4,rollDeg:12});
     const hooks=[cubeRepresentation,equirectRepresentation,createTiledCubeRepresentation(()=>({tileMemoryBytes:1024*1024,responseBytes:1024*1024,requests:1,waiting:1,uploadOutstandingBytes:1024*1024}))];
     for(const record of result.fragment!.asset.representations){const owner=hooks.find(h=>h.projection===record.projection)!;const validated=owner.validate(record as never,{path:"$.asset",baseUrl:"https://fixture.invalid/asset.json"});expect(validated.ok).toBe(true);if(!validated.ok)continue;let total=0;for(const file of owner.files(validated.representation as never)){const bytes=new Uint8Array(readFileSync(path.join(result.out!,new URL(file.url).pathname.slice(1))));expect(checkImage(bytes,file,null)).toBeNull();total+=bytes.length;}expect(total).toBe(record.encodedBytes);}
-    expect(result.provenance?.toolVersion).toBe("1");expect(result.provenance).not.toHaveProperty("libSha256");expect(result.provenance).toHaveProperty("components");
+    expect(result.provenance?.toolVersion).toBe("2");expect(result.provenance).not.toHaveProperty("libSha256");expect(result.provenance).toHaveProperty("components");
   });
   it("refuses an absent pose instead of inventing aligned north",()=>{
     expect(()=>preparePanorama(["--input","synthetic:cardinal:64","--attribution","Fixture author","--preview-face-sizes","8"],{log:()=>{}})).toThrow(/no pose/);

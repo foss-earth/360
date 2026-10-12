@@ -51,7 +51,7 @@ import { renderCubeTile } from "@foss-earth/tiled-cubemap/preparation";
  * resampling, a file's name): loaders keep files under the revision between
  * visits and never ask for them again (docs/scenes/format.md, "Saved images").
  */
-const TOOL_VERSION = "1";
+const TOOL_VERSION = "2";
 /** A stored tile's texels past its edge, on every side: one bilinear tap never reads another tile. */
 const TILE_GUTTER = 1;
 const TILE_WARPS = { eac: "equi-angular", cube: "gnomonic" };
@@ -269,7 +269,7 @@ export function preparePanorama(argv, ports = {}) {
     scriptSha256: sha256(readFileSync(scriptPath)),
     components: Object.fromEntries(["@foss-earth/images/node", "@foss-earth/cubemap/preparation", "@foss-earth/equirectangular/preparation", "@foss-earth/tiled-cubemap/preparation"].map(entry => [entry, { entrySha256: sha256(readFileSync(fileURLToPath(import.meta.resolve(entry)))) }])),
     sourceRevision: "90e23b3ee96f53ec5900afc5991a21fffa58649d",
-    compatibility: "toolVersion 1 retains original intended image bytes, paths and revision inputs; exact split-artifact byte comparison pending; component entry digests replace monolithic libSha256",
+    compatibility: "toolVersion 2 resamples without reading past the source's last row or column, where toolVersion 1 left some images' last row black; otherwise as toolVersion 1, which retains original intended image bytes, paths and revision inputs; exact split-artifact byte comparison pending; component entry digests replace monolithic libSha256",
     node: process.version,
     source,
     gpano,
