@@ -91,6 +91,13 @@ export interface ImageViewer {
   subscribe(listener: (status: ViewerStatus) => void): () => void;
   pick(clientX: number, clientY: number): readonly string[];
   hover(id: string | null): void;
+  /**
+   * Moves a published image. While that image is being shown, the presented
+   * eye follows its marker and the photograph keeps the new orientation.
+   */
+  reposition(id: string, edit: { placement: ViewerImageInput["placement"]; capture?: { latitudeDeg: number; longitudeDeg: number; heightMeters: number | null } }): void;
+  /** Ghosts one published image. Null restores every image to solid. */
+  setImageOpacity(id: string | null, opacity: number): void;
   activateAction(id: string): Promise<boolean>;
   /** Same host clock/frame used by renderer and navigation. */
   onFrame(frame: { now: number; dtMs: number }): boolean;

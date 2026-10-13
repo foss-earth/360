@@ -85,6 +85,8 @@ export interface OrbState {
   outline: { color: readonly [number, number, number, number]; widthPx: number } | null;
   /** Multiplies the radius after the screen-size bounds, as a hover grows the orb: 1 normally. */
   displayScale: number;
+  /** 1 is solid. Lower values draw the photograph over whatever is behind it. */
+  opacity?: number;
 }
 
 export interface OrbExpansion {
@@ -136,6 +138,10 @@ export interface PanoramaImmersion {
    * globe camera's view is used. Null hides it.
    */
   show(state: { source: ImmersionSource; next?: ImmersionSource | null; mix?: number; opacity?: number; view?: NavigationPresentation | null } | null): void;
+  /** Multiplies the opacity `show` asked for. 1 leaves that fade unchanged. */
+  setOpacity(opacity: number): void;
+  /** Keeps the image on screen and samples it with a new orientation. */
+  replaceContent(content: Mat3): void;
   readonly visible: boolean;
 }
 
@@ -689,14 +695,16 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       if (!frames) return;
       // Expanding, the orb is the sphere itself, clipped by terrain where its overlay has not yet revealed it.
       const radius = orb.expansion?.radiusMeters ?? orb.drawnRadius(length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms);
-      if (orb.applyUniforms(material, frames.uniforms, radius, 1)) record(`orb:${id}`, frames.current, frames.uniforms);
+      const opacity = orb.state.opacity ?? 1;
+      material.disableDepthWrite = opacity < 0.999;
+      if (orb.applyUniforms(material, frames.uniforms, radius, opacity)) record(`orb:${id}`, frames.current, frames.uniforms);
     }));
     const revealObserver: Observer<Mesh> | null = revealMesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames || !orb.expansion) return;
       const kind = orb.expansion.source?.kind;
       const target = kind === "equirectangular" ? orb.revealEquirectMaterial! : kind === "tiles" ? orb.revealTilesMaterial! : revealMaterial;
-      if (orb.applyUniforms(target, frames.uniforms, orb.expansion.radiusMeters, orb.expansion.reveal, orb.expansion.source)) record(`reveal:${id}`, frames.current, frames.uniforms);
+      if (orb.applyUniforms(target, frames.uniforms, orb.expansion.radiusMeters, orb.expansion.reveal * (orb.state.opacity ?? 1), orb.expansion.source)) record(`reveal:${id}`, frames.current, frames.uniforms);
     }));
     orbs.set(id, orb);
     orb.update({});
@@ -707,6 +715,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   const immersionMesh = available ? new Mesh("panorama-immersion", scene) : null;
   const immersionMaterials = new Map<string, ShaderMaterial>();
   let immersionState: { source: ImmersionSource; next: ImmersionSource | null; mix: number; opacity: number; view: NavigationPresentation | null } | null = null;
+  /** A host multiplier over the fade opacity, so a placement tool can ghost the photograph. */
+  let displayOpacity = 1;
   /** `opaque`: drawn without blending, for immersion at full opacity (the opaqueImmersion experiment). */
   function immersionMaterial(defines: string[], opaque = false): ShaderMaterial {
     const all = withLeanDefine(defines, leanShaders());
@@ -744,7 +754,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const state = immersionState;
     if (!state) return;
     material.setMatrix("inverseViewRotProj", uniforms.inverseViewRotProj);
-    material.setFloat("opacity", state.opacity);
+    material.setFloat("opacity", state.opacity * displayOpacity);
     material.setFloat("mixWeight", state.mix);
     applyContent(material, state.source.content);
     applyContent(material, (state.next ?? state.source).content, "nextContent");
@@ -781,7 +791,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   function applyImmersionMaterial(): void {
     if (!immersionMesh || !immersionState) return;
     // The crossfade blends inside the shader; only a fade from the globe needs the frame behind.
-    const opaque = experiments.opaqueImmersion && immersionState.opacity >= 1;
+    const opaque = experiments.opaqueImmersion && immersionState.opacity * displayOpacity >= 0.999;
     immersionMesh.material = immersionMaterial(immersionDefines(immersionState), opaque);
   }
   const immersion: PanoramaImmersion = {
@@ -790,6 +800,16 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       immersionState = state ? { source: state.source, next: state.next ?? null, mix: state.mix ?? 0, opacity: state.opacity ?? 1, view: state.view ?? null } : null;
       applyImmersionMaterial();
       immersionMesh.setEnabled(immersionState !== null);
+      options.requestRender();
+    },
+    setOpacity(opacity) {
+      displayOpacity = Math.min(1, Math.max(0, opacity));
+      applyImmersionMaterial();
+      options.requestRender();
+    },
+    replaceContent(content) {
+      if (!immersionState) return;
+      immersionState = { ...immersionState, source: { ...immersionState.source, content } };
       options.requestRender();
     },
     get visible() { return immersionState !== null; },

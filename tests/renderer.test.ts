@@ -208,6 +208,10 @@ describe("panorama renderer experiments", () => {
     expect(material().needAlphaBlending()).toBe(true);
     renderer.immersion.show({ source: { texture, kind: "cube", content } });
     expect(material().needAlphaBlending()).toBe(false);
+    renderer.immersion.setOpacity(0.4);
+    expect(material().needAlphaBlending()).toBe(true);
+    renderer.immersion.setOpacity(1);
+    expect(material().needAlphaBlending()).toBe(false);
     renderer.setExperiments({ opaqueImmersion: false });
     expect(material().needAlphaBlending()).toBe(true);
     renderer.dispose();

@@ -241,7 +241,37 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
   function applyPlacement(entry: Entry, placement: ViewerImageInput["placement"]): void {
     entry.input = { ...entry.input, placement };
     entry.orb.update({ marker: placement.marker, radiusMeters: placement.radiusMeters, content: placement.content, outline: placement.outline });
+    if (immersion?.entry === entry && !immersion.leaving) renderer.immersion.replaceContent(placement.content);
     if (entry.visible) options.requestRender();
+  }
+  function withCapture(input: ViewerImageInput, capture: { latitudeDeg: number; longitudeDeg: number; heightMeters: number | null }): ViewerImageInput {
+    const previous = input.details?.capture;
+    return { ...input, details: { ...input.details, capture: {
+      latitudeDeg: capture.latitudeDeg, longitudeDeg: capture.longitudeDeg, heightMeters: capture.heightMeters,
+      horizontalAccuracyMeters: previous?.horizontalAccuracyMeters ?? null,
+    } } };
+  }
+  function reposition(id: string, edit: { placement: ViewerImageInput["placement"]; capture?: { latitudeDeg: number; longitudeDeg: number; heightMeters: number | null } }): void {
+    if (disposed) return;
+    const entry = entries.get(id);
+    if (!entry || !live(entry)) return;
+    if (edit.capture) entry.input = withCapture(entry.input, edit.capture);
+    const next = immutable(edit.placement);
+    // A visit freezes ordinary ground updates. A placement edit still applies,
+    // and replaces the frozen copy so leaving does not restore the old place.
+    entry.pendingPlacement = null;
+    if (entry.frozenPlacement) entry.frozenPlacement = next;
+    applyPlacement(entry, next);
+    const state = immersion;
+    if (state?.entry === entry && !state.leaving && !state.lease.released && entry.input.details?.capture && next.marker) {
+      state.lease.setPresentationView(pose(entry, geoView(state.look.get(), state.roll)));
+    }
+  }
+  function setImageOpacity(id: string | null, opacity: number): void {
+    if (disposed) return;
+    const value = Math.min(1, Math.max(0, opacity));
+    for (const entry of entries.values()) if (live(entry)) entry.orb.update({ opacity: id !== null && entry.input.id === id ? value : 1 });
+    renderer.immersion.setOpacity(id === null ? 1 : value);
   }
   function animate(ms: number, step: (t: number) => void, signal: AbortSignal, lease: ViewerNavigationLease | null): Promise<void> {
     if (signal.aborted) return Promise.reject(signal.reason);
@@ -690,6 +720,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     subscribe(listener) { if (!disposed) { listeners.add(listener); listener(status()); } return () => { listeners.delete(listener); }; },
     pick(x, y) { if (disposed || phase !== "overview") return []; const ids = new Map([...entries.values()].map(entry => [entry.drawId, entry.input.id])); return renderer.pick(x, y, options.isOccluded).flatMap(hit => ids.has(hit.id) ? [ids.get(hit.id)!] : []); },
     hover(id) { const next = phase === "overview" && id && entries.has(id) ? id : null; if (next === hovered) return; hovered = next; if (!hoverRelease) hoverRelease = options.holdRendering(); options.requestRender(); emit(); },
+    reposition, setImageOpacity,
     async activateAction(id) { const action = immersion?.entry.input.actions.find(item => item.id === id); return action ? await action.activate() : false; },
     onFrame(frame) {
       if (disposed) return false;

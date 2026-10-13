@@ -3,6 +3,28 @@ import type { ViewerSource } from "../src/viewer.js";
 import { deferred, fixture, flush, image, representation, source } from "./fixtures/viewer.js";
 
 describe("injected viewer lifecycle", () => {
+  it("moves a published image while a visit has frozen ordinary placement, and ghosts it", async () => {
+    const f = fixture();
+    const handle = await f.viewer.prepare(image("a"), new AbortController().signal);
+    await handle.ready();
+    f.viewer.replaceImages([handle]);
+    expect(await f.viewer.enter("a")).toBe(true);
+    expect(f.viewer.isPlacementFrozen("a")).toBe(true);
+    f.lease.setPresentationView.mockClear();
+    f.viewer.reposition("a", {
+      placement: { marker: [1, 2, 3], radiusMeters: 4, content: [[0, 1, 0], [1, 0, 0], [0, 0, 1]], outline: null, hoverScale: 1 },
+      capture: { latitudeDeg: 45, longitudeDeg: -93, heightMeters: 12 },
+    });
+    expect(f.orbs[0].state.marker).toEqual([1, 2, 3]);
+    expect(f.viewer.describeImage("a")?.details?.capture).toMatchObject({ latitudeDeg: 45, longitudeDeg: -93, heightMeters: 12 });
+    expect(f.lease.setPresentationView).toHaveBeenCalled();
+    expect(f.options.renderer.immersion.replaceContent).toHaveBeenCalled();
+    expect(f.viewer.isPlacementFrozen("a")).toBe(true);
+    f.viewer.setImageOpacity("a", 0.4);
+    expect(f.orbs[0].state.opacity).toBe(0.4);
+    expect(f.options.renderer.immersion.setOpacity).toHaveBeenCalledWith(0.4);
+    f.viewer.dispose();
+  });
   it("reports only published current sources and retains the successful preview limitation", async () => {
     const f=fixture(),input=image(),controller=new AbortController();
     f.options.resources.preview=()=>({representation:input.asset.representations[0],limitation:"original preview limit"});
