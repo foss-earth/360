@@ -37,6 +37,11 @@ export interface LookInputOptions {
   inputMode?: () => "auto" | "mouse" | "trackpad";
   /** Safari on macOS reports trackpad pinches as gesture events, and ctrl+wheel is not a pinch there. */
   safariGestures?: boolean;
+  /**
+   * Two touches off this element pinch it about their midpoint. One touch
+   * off the element stays with whatever it landed on.
+   */
+  claimForeignTouch?: boolean;
   /** When the last wheel event came before looking began: a gesture under way then, such as a swipe's momentum over the globe, looks nowhere. */
   precedingWheelMs?: number;
 }
@@ -63,7 +68,19 @@ export interface WheelGestureRouter {
 /** Below this gap between wheel events, ms, they are one gesture: the engine's WHEEL_GESTURE_IDLE_MS. */
 const WHEEL_IDLE_MS = 180;
 
-export function createWheelGestureRouter(options: { window: Window; nowMs(): number; idleMs?: number }): WheelGestureRouter {
+export function createWheelGestureRouter(options: {
+  window: Window;
+  nowMs(): number;
+  idleMs?: number;
+  /**
+   * A wheel that began off every registered surface. Return the surface that
+   * should take it, or null to leave it with the page. Called once, when the
+   * gesture starts, and that choice is kept for the rest of it.
+   */
+  claimUnusedWheel?(target: EventTarget | null, event: WheelEvent): HTMLElement | null;
+  /** A Safari pinch that began off every registered surface. Same lifetime as a claimed wheel. */
+  claimUnusedGesture?(target: EventTarget | null, event: Event): HTMLElement | null;
+}): WheelGestureRouter {
   const { window } = options;
   const idleMs = options.idleMs ?? WHEEL_IDLE_MS;
   const owners = new Map<HTMLElement, RoutedGestureHandlers>();
@@ -79,16 +96,23 @@ export function createWheelGestureRouter(options: { window: Window; nowMs(): num
     event.stopImmediatePropagation();
     if (event.cancelable) event.preventDefault();
   };
+  const claimed = (element: HTMLElement | null | undefined): HTMLElement | "other" => element && owners.has(element) ? element : "other";
   const onWheel = (event: Event): void => {
     const now = options.nowMs();
-    if (now - lastWheelMs > idleMs || wheelOwner === null) wheelOwner = ownerOf(event.target);
+    if (now - lastWheelMs > idleMs || wheelOwner === null) {
+      const direct = ownerOf(event.target);
+      wheelOwner = direct !== "other" ? direct : claimed(options.claimUnusedWheel?.(event.target, event as WheelEvent));
+    }
     lastWheelMs = now;
     if (wheelOwner === "other") return;
     take(event);
     if (wheelOwner !== "suppressed") owners.get(wheelOwner)?.wheel(event as WheelEvent);
   };
   const onGesture = (event: Event): void => {
-    if (event.type === "gesturestart" || gestureOwner === null) gestureOwner = ownerOf(event.target);
+    if (event.type === "gesturestart" || gestureOwner === null) {
+      const direct = ownerOf(event.target);
+      gestureOwner = direct !== "other" ? direct : claimed(options.claimUnusedGesture?.(event.target, event));
+    }
     const owner = gestureOwner;
     if (event.type === "gestureend") gestureOwner = null;
     if (owner === "other") return;
@@ -133,8 +157,11 @@ export interface LookInputBinding {
 export function attachLookInput(options: LookInputOptions): LookInputBinding {
   const { canvas, model, window } = options;
   const pointers = new Map<number, { x: number; y: number; at: number }>();
+  /** Touches that landed off the surface. They join a pinch once a second finger is down. */
+  const outside = new Map<number, { x: number; y: number; at: number }>();
   let pinchFrom: TouchPair | null = null;
-  /** The last place a pointer was seen over the element, for a Safari pinch without coordinates. */
+  let pinching = false;
+  /** The last place a pointer was seen, for a Safari pinch without coordinates. */
   let hover: { x: number; y: number } | null = null;
   const local = (x: number, y: number): SurfacePoint | null => options.localPoint?.(x, y) ?? null;
   const keys = new Set<string>();
@@ -158,12 +185,44 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (model.moving()) options.requestFrame();
   };
 
-  /** The first two touches, in surface-local CSS px when the host converts them. */
-  const touchPair = (): TouchPair => {
-    const [a, b] = [...pointers.values()];
-    const pa = local(a.x, a.y) ?? a, pb = local(b.x, b.y) ?? b;
+  const pointOf = (clientX: number, clientY: number): SurfacePoint => local(clientX, clientY) ?? { x: clientX, y: clientY };
+  const pairOf = (a: { x: number; y: number }, b: { x: number; y: number }): TouchPair => {
+    const pa = pointOf(a.x, a.y), pb = pointOf(b.x, b.y);
     return { mid: { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 }, separation: Math.hypot(pa.x - pb.x, pa.y - pb.y) };
   };
+  /** The first two contacts, surface touches first. No list is built. */
+  const firstTwo = (): readonly [{ x: number; y: number }, { x: number; y: number }] | null => {
+    let a: { x: number; y: number } | null = null;
+    let b: { x: number; y: number } | null = null;
+    for (const point of pointers.values()) { if (!a) a = point; else { b = point; break; } }
+    if (!b) for (const point of outside.values()) { if (!a) a = point; else { b = point; break; } }
+    return a && b ? [a, b] : null;
+  };
+  const rebaseline = (): void => {
+    const pair = firstTwo();
+    pinchFrom = pair ? pairOf(pair[0], pair[1]) : null;
+    pinching = pinchFrom !== null;
+  };
+  const applyPinch = (): void => {
+    const pair = firstTwo();
+    if (!pair) { pinchFrom = null; pinching = false; return; }
+    const now = pairOf(pair[0], pair[1]);
+    if (pinchFrom && pinchFrom.separation > 0 && now.separation > 0) model.touchPinch(pinchFrom, now);
+    pinchFrom = now;
+    pinching = true;
+    options.requestFrame();
+  };
+  const finishContacts = (time: number, lastAt: number, drove: boolean): void => {
+    if (pointers.size + outside.size >= 2) { rebaseline(); return; }
+    pinchFrom = null;
+    if (pointers.size > 0 || outside.size > 0) return;
+    if (!drove && !pinching) return;
+    pinching = false;
+    model.release(time - lastAt);
+    if (model.moving()) options.requestFrame();
+  };
+  const nodeOf = (options.window as unknown as { Node?: typeof Node }).Node;
+  const overSurface = (target: EventTarget | null): boolean => Boolean(nodeOf && target instanceof nodeOf && canvas.contains(target));
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
@@ -172,7 +231,8 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
     try { canvas.setPointerCapture(event.pointerId); } catch { /* the pointer may already be gone */ }
     hover = { x: event.clientX, y: event.clientY };
-    pinchFrom = pointers.size === 2 ? touchPair() : null;
+    if (pointers.size + outside.size >= 2) rebaseline();
+    else pinchFrom = null;
     event.preventDefault();
   };
   const onPointerMove = (event: PointerEvent): void => {
@@ -181,23 +241,43 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (!last) return;
     const current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
     pointers.set(event.pointerId, current);
-    if (pointers.size >= 2) {
-      const now = touchPair();
-      if (pinchFrom !== null) model.touchPinch(pinchFrom, now);
-      pinchFrom = now;
-    } else {
+    if (pointers.size + outside.size >= 2) applyPinch();
+    else {
       model.drag(current.x - last.x, current.y - last.y, current.at - last.at);
+      options.requestFrame();
     }
-    options.requestFrame();
   };
   const onPointerUp = (event: PointerEvent): void => {
     const last = pointers.get(event.pointerId);
     if (!last || !pointers.delete(event.pointerId)) return;
-    pinchFrom = pointers.size === 2 ? touchPair() : null;
-    if (pointers.size === 0) {
-      model.release(event.timeStamp - last.at);
-      if (model.moving()) options.requestFrame();
-    }
+    finishContacts(event.timeStamp, last.at, true);
+  };
+  const onForeignDown = (event: PointerEvent): void => {
+    if (!attached || event.pointerType !== "touch" || overSurface(event.target)) return;
+    outside.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
+    hover = { x: event.clientX, y: event.clientY };
+    if (pointers.size + outside.size < 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    model.cancelInertia();
+    options.onUserInput();
+    rebaseline();
+  };
+  const onForeignMove = (event: PointerEvent): void => {
+    const last = outside.get(event.pointerId);
+    if (!last) return;
+    outside.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
+    hover = { x: event.clientX, y: event.clientY };
+    if (pointers.size + outside.size < 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    applyPinch();
+  };
+  const onForeignUp = (event: PointerEvent): void => {
+    const last = outside.get(event.pointerId);
+    if (!last || !outside.delete(event.pointerId)) return;
+    if (pointers.size + outside.size >= 2) { event.preventDefault(); event.stopPropagation(); }
+    finishContacts(event.timeStamp, last.at, false);
   };
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
@@ -264,7 +344,7 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   const onBlur = (): void => {
     keys.clear();
     for (const id of pointers.keys()) { try { canvas.releasePointerCapture(id); } catch { /* released */ } }
-    pointers.clear(); pinchFrom = null;
+    pointers.clear(); outside.clear(); pinchFrom = null; pinching = false;
     padRates.lookX = padRates.lookY = padRates.zoom = 0;
     gestureScale = 1;
     model.cancelInertia(); syncRates();
@@ -278,6 +358,13 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
   canvas.addEventListener("pointerleave", onPointerLeave);
+  const foreign = options.claimForeignTouch === true;
+  if (foreign) {
+    window.addEventListener("pointerdown", onForeignDown, { capture: true });
+    window.addEventListener("pointermove", onForeignMove, { capture: true });
+    window.addEventListener("pointerup", onForeignUp, { capture: true });
+    window.addEventListener("pointercancel", onForeignUp, { capture: true });
+  }
   const unroute = options.router?.register(canvas, { wheel: onWheel, gesture: onRoutedGesture }) ?? null;
   if (!unroute) {
     canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -321,6 +408,12 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("pointerleave", onPointerLeave);
+      if (foreign) {
+        window.removeEventListener("pointerdown", onForeignDown, { capture: true });
+        window.removeEventListener("pointermove", onForeignMove, { capture: true });
+        window.removeEventListener("pointerup", onForeignUp, { capture: true });
+        window.removeEventListener("pointercancel", onForeignUp, { capture: true });
+      }
       unroute?.();
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("gesturestart", onGestureStart);

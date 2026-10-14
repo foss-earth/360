@@ -132,6 +132,70 @@ describe("routed image input", () => {
     router.dispose();
   });
 
+  it("gives an unused wheel over another element to the surface, at that pointer", () => {
+    let now = 1000;
+    const surface = document.createElement("div"), other = document.createElement("div");
+    document.body.append(surface, other);
+    const router = createWheelGestureRouter({
+      window, nowMs: () => now,
+      claimUnusedWheel: () => surface,
+    });
+    const { target, camera } = rectangleTarget();
+    const binding = attachLookInput({
+      window, canvas: surface, model: target, router, controlTakesKey, createWheelGestureClassifier,
+      localPoint: (x, y) => ({ x: x - 50, y: y - 20 }),
+      onExit() {}, onUserInput() {}, requestFrame() {}, inputMode: () => "mouse",
+    });
+    const plane = rectanglePlanePointAt(camera(), { x: 100, y: 50 });
+    const event = new WheelEvent("wheel", { deltaY: -100, clientX: 150, clientY: 70, bubbles: true, cancelable: true });
+    other.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    const back = rectangleLocalPointOf(camera(), plane);
+    expect(back.x).toBeCloseTo(100, 6);
+    expect(back.y).toBeCloseTo(50, 6);
+    now += 500;
+    binding.detach();
+    router.dispose();
+  });
+
+  it("zooms about two touches, including touches that land off the surface", () => {
+    const surface = document.createElement("div"), other = document.createElement("div");
+    document.body.append(surface, other);
+    const { target, camera } = rectangleTarget();
+    const binding = attachLookInput({
+      window, canvas: surface, model: target, controlTakesKey, createWheelGestureClassifier,
+      claimForeignTouch: true, localPoint: (x, y) => ({ x, y }),
+      onExit() {}, onUserInput() {}, requestFrame() {},
+    });
+    const down = (target: Element, id: number, x: number, y: number) => {
+      const event = new PointerEvent("pointerdown", { pointerId: id, pointerType: "touch", clientX: x, clientY: y, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event;
+    };
+    const move = (target: Element, id: number, x: number, y: number) => {
+      target.dispatchEvent(new PointerEvent("pointermove", { pointerId: id, pointerType: "touch", clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    };
+    const from = { x: 250, y: 200 };
+    const plane = rectanglePlanePointAt(camera(), from);
+    const before = camera().scale;
+    const first = down(other, 1, 200, 200);
+    expect(first.defaultPrevented).toBe(false);
+    down(other, 2, 300, 200);
+    move(other, 2, 350, 200);
+    expect(camera().scale).toBeCloseTo(before * 1.5, 6);
+    const back = rectangleLocalPointOf(camera(), plane);
+    expect(back.x).toBeCloseTo(275, 6);
+    expect(back.y).toBeCloseTo(200, 6);
+    other.dispatchEvent(new PointerEvent("pointerup", { pointerId: 1, pointerType: "touch", clientX: 200, clientY: 200, bubbles: true }));
+    other.dispatchEvent(new PointerEvent("pointerup", { pointerId: 2, pointerType: "touch", clientX: 350, clientY: 200, bubbles: true }));
+    // One finger on the picture still drags it.
+    const x = camera().x;
+    surface.dispatchEvent(new PointerEvent("pointerdown", { pointerId: 3, pointerType: "mouse", clientX: 10, clientY: 10, bubbles: true, cancelable: true, button: 0 }));
+    surface.dispatchEvent(new PointerEvent("pointermove", { pointerId: 3, pointerType: "mouse", clientX: 18, clientY: 14, bubbles: true, cancelable: true }));
+    expect(camera().x).toBeCloseTo(x + 8, 6);
+    binding.detach();
+  });
+
   it("zooms at the wheel's own point, in surface-local pixels", () => {
     const { router, surface, camera, wheel, binding } = setup();
     const plane = rectanglePlanePointAt(camera(), { x: 100, y: 50 });

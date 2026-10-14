@@ -9,7 +9,7 @@ import { fitRectangleCamera, resizeRectangleCamera, type RectangleCamera, type R
 
 export type RectangleSide = "left" | "right";
 
-/** A participating document: the selected image tab on a logically visible, expanded side. */
+/** A participating document: the selected image tab on a side. Minimizing that window does not remove it. */
 export interface RectangleSlotDocument {
   readonly tabId: string;
   readonly documentId: string;
