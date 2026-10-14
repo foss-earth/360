@@ -1,4 +1,4 @@
-# @foss-earth/image-viewer
+# @foss-earth/sphere-image
 
 Image viewer composition and camera handover for FOSS Earth. It lets a host app enter a 360 degree sphere (an "orb") or a flat image window from the globe, look around, and fly back out. Everything the viewer needs from the host (renderer, resources, input, camera pose, world geography, settings, clock) is passed in through explicit ports.
 
@@ -12,7 +12,7 @@ Image viewer composition and camera handover for FOSS Earth. It lets a host app 
 Other repositories own related pieces:
 
 - [scenes](https://github.com/foss-earth/scenes): scene documents, placements, history and navigation topology. The viewer never resolves scene entities; scenes supplies activation callbacks.
-- [cubemap](https://github.com/foss-earth/cubemap), [equirectangular](https://github.com/foss-earth/equirectangular), [tiled-cubemap](https://github.com/foss-earth/tiled-cubemap) and [preview-sheets](https://github.com/foss-earth/preview-sheets): image acquisition, spatial conventions, uploads, tile layout and preview sheets. No leaf validator or spatial format algorithm is copied here.
+- [sphere-cubemap](https://github.com/foss-earth/sphere-cubemap), [sphere-equirectangular](https://github.com/foss-earth/sphere-equirectangular), [sphere-tiled-cubemap](https://github.com/foss-earth/sphere-tiled-cubemap) and [preview-sheets](https://github.com/foss-earth/preview-sheets): image acquisition, spatial conventions, uploads, tile layout and preview sheets. No leaf validator or spatial format algorithm is copied here.
 - [images](https://github.com/foss-earth/images): the shared broker, source cache and file services.
 
 ## Exports
@@ -96,12 +96,10 @@ The generic Renderer owns that section and its `all` and `presentationCandidates
 
 ## Earlier package name
 
-This package was named `@foss-earth/360`. Nothing is published under that name
-any more: consumers import `@foss-earth/image-viewer`. Records and documents did
-not change: the `panorama-image` asset type, the `cube`,
+This package was named `@foss-earth/360`. Consumers import `@foss-earth/sphere-image`.
+Records and documents did not change: the `panorama-image` asset type, the `cube`,
 `equirectangular` and `tiled-cube` projections, the representation schemas'
-`$id`s and media URLs are as before. The repository keeps the name `360` until it
-is renamed on the host.
+`$id`s and media URLs are as before. The repository is `foss-earth/sphere-image`.
 
 ## Development
 

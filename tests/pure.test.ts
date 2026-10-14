@@ -67,7 +67,7 @@ describe("entry boundaries", () => {
   it("imports the root and core entries in node with no document or window", async () => {
     expect(typeof globalThis.document).toBe("undefined");
     expect(typeof globalThis.window).toBe("undefined");
-    const [rootEntry, core] = await Promise.all([import("@foss-earth/image-viewer"), import("@foss-earth/image-viewer/core")]);
+    const [rootEntry, core] = await Promise.all([import("@foss-earth/sphere-image"), import("@foss-earth/sphere-image/core")]);
     expect(Object.keys(rootEntry).length).toBeGreaterThan(0);
     expect(Object.keys(core)).toEqual(Object.keys(rootEntry));
   });

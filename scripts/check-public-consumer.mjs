@@ -14,7 +14,7 @@ function command(name,args,cwd=owner){const result=spawnSync(name,args,{cwd,enco
 const archives={};
 for(const record of records){assert.equal(Object.keys(record).sort().join(","),"archive,name,sha256,version");assert.match(record.name,/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/);assert.match(record.sha256,/^[0-9a-f]{64}$/);const file=realpathSync(path.resolve(path.dirname(manifest),record.archive));assert.equal(digest(file),record.sha256,`${record.name} archive digest`);assert(!archives[record.name],"duplicate artifact identity");archives[record.name]={...record,file};}
 const packed=JSON.parse(command("npm",["pack","--ignore-scripts","--json","--pack-destination",folder]))[0];
-const ownArchive=path.join(folder,packed.filename);archives["@foss-earth/image-viewer"]={name:"@foss-earth/image-viewer",version:"0.1.0",file:ownArchive,sha256:digest(ownArchive)};
+const ownArchive=path.join(folder,packed.filename);archives["@foss-earth/sphere-image"]={name:"@foss-earth/sphere-image",version:"0.1.0",file:ownArchive,sha256:digest(ownArchive)};
 writeFileSync(path.join(workspace,"package.json"),JSON.stringify({name:"foss-earth-image-viewer-public-consumer",private:true,type:"module",dependencies:Object.fromEntries(Object.values(archives).map(record=>[record.name,`file:${record.file}`]))},null,2));
 command("npm",["install","--offline","--ignore-scripts","--no-audit","--no-fund","--cache",path.join(owner,"build/npm-cache")],workspace);
 for(const record of Object.values(archives)){const installed=JSON.parse(readFileSync(path.join(workspace,"node_modules",record.name,"package.json")));assert.equal(installed.name,record.name);assert.equal(installed.version,record.version);}

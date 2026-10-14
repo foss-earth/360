@@ -1,12 +1,12 @@
 {
-  "name": "@foss-earth/image-viewer",
+  "name": "@foss-earth/sphere-image",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "https://github.com/foss-earth/360.git"
+    "url": "https://github.com/foss-earth/sphere-image.git"
   },
   "exports": {
     ".": {

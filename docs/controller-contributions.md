@@ -1,6 +1,6 @@
 # Panorama controller and source-dependent tile ports
 
-The pure `@foss-earth/image-viewer` and `@foss-earth/image-viewer/core` entries now export:
+The pure `@foss-earth/sphere-image` and `@foss-earth/sphere-image/core` entries now export:
 
 ```ts
 const SPHERE_GAMEPAD_ACTIONS: readonly ActionDescriptor[];
@@ -21,7 +21,7 @@ the released public contracts:
 
 ```ts
 import { DEFAULT_BINDING_TRANSFORM } from "@felipegalind0/gamepad-tools/core";
-import { SPHERE_GAMEPAD_ACTIONS, createSphereProfileContribution } from "@foss-earth/image-viewer";
+import { SPHERE_GAMEPAD_ACTIONS, createSphereProfileContribution } from "@foss-earth/sphere-image";
 import { createGlobeGamepadAdapter, createStandardGlobeProfile } from "@foss-earth/engine/gamepad";
 
 const contribution = createSphereProfileContribution(DEFAULT_BINDING_TRANSFORM);

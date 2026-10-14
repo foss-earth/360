@@ -1,8 +1,8 @@
-import { createGlobeViewerNavigation, createGlobeViewerProjection, createGlobeViewerFrameBinding, createViewerSceneDescription, globeViewerMath, globeViewerPoses, type GlobeViewerRuntime } from "@foss-earth/image-viewer/globe";
-import { createGlobeViewerInput } from "@foss-earth/image-viewer/globe-browser";
-import { createImageViewer } from "@foss-earth/image-viewer/viewer";
-import { createViewerResources } from "@foss-earth/image-viewer/resources";
-import type { SettledPublishedImageViewer, ViewerWorldMath, ViewerPosePorts } from "@foss-earth/image-viewer";
+import { createGlobeViewerNavigation, createGlobeViewerProjection, createGlobeViewerFrameBinding, createViewerSceneDescription, globeViewerMath, globeViewerPoses, type GlobeViewerRuntime } from "@foss-earth/sphere-image/globe";
+import { createGlobeViewerInput } from "@foss-earth/sphere-image/globe-browser";
+import { createImageViewer } from "@foss-earth/sphere-image/viewer";
+import { createViewerResources } from "@foss-earth/sphere-image/resources";
+import type { SettledPublishedImageViewer, ViewerWorldMath, ViewerPosePorts } from "@foss-earth/sphere-image";
 import type { LoadSceneOptions } from "@foss-earth/scenes/browser";
 export const worldMath: ViewerWorldMath = globeViewerMath;
 export const poses: ViewerPosePorts = globeViewerPoses;

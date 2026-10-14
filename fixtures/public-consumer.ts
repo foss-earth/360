@@ -1,11 +1,11 @@
 /** Compile only against the installed exports map; no sibling source aliases. */
-import { createBuiltInRepresentations, validateViewerAsset, createViewerSelection, SPHERE_GAMEPAD_ACTIONS, createSphereProfileContribution, type SphereProfileContribution, type ImageViewer, type PublishedImageViewer, type ViewerResourceReadings, type ViewerWorldMath } from "@foss-earth/image-viewer";
-import { createImageViewer, type ImageViewerOptions } from "@foss-earth/image-viewer/viewer";
-import type { ViewerResources } from "@foss-earth/image-viewer/viewer";
-import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "@foss-earth/image-viewer/resources";
-import { createViewerTabs, type ViewerPanelPorts } from "@foss-earth/image-viewer/panels";
-import { VIEWER_PARAMETERS, VIEWER_SECTION_TITLES, VIEWER_EXPERIMENT_IDS, VIEWER_EXPERIMENT_PARAMETERS } from "@foss-earth/image-viewer/settings";
-import { prepareSphere } from "@foss-earth/image-viewer/preparation";
+import { createBuiltInRepresentations, validateViewerAsset, createViewerSelection, SPHERE_GAMEPAD_ACTIONS, createSphereProfileContribution, type SphereProfileContribution, type ImageViewer, type PublishedImageViewer, type ViewerResourceReadings, type ViewerWorldMath } from "@foss-earth/sphere-image";
+import { createImageViewer, type ImageViewerOptions } from "@foss-earth/sphere-image/viewer";
+import type { ViewerResources } from "@foss-earth/sphere-image/viewer";
+import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "@foss-earth/sphere-image/resources";
+import { createViewerTabs, type ViewerPanelPorts } from "@foss-earth/sphere-image/panels";
+import { VIEWER_PARAMETERS, VIEWER_SECTION_TITLES, VIEWER_EXPERIMENT_IDS, VIEWER_EXPERIMENT_PARAMETERS } from "@foss-earth/sphere-image/settings";
+import { prepareSphere } from "@foss-earth/sphere-image/preparation";
 import { levelUp, orbitAngles, orbitLook, pointGeodetic, glideSettling } from "@foss-earth/engine/core";
 import { createStandardGlobeProfile, type GlobeGamepadAdapterOptions, type GlobeProfileContributions } from "@foss-earth/engine/gamepad";
 import { DEFAULT_BINDING_TRANSFORM, type BindingSpec } from "@felipegalind0/gamepad-tools/core";

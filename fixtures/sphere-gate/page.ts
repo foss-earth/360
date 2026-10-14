@@ -4,9 +4,9 @@
  */
 import { Color3, Color4, Constants, FreeCamera, MeshBuilder, RawCubeTexture, RawTexture, Scene, StandardMaterial, Vector3, WebGPUEngine, Engine, type AbstractEngine } from "@babylonjs/core";
 import { GPU_LAYER_SOURCE_FACES, type CubeFaceName } from "@foss-earth/sphere-cubemap";
-import { createLookModel, createSphereCameraTarget, createSphereSlot, type LookSettings } from "@foss-earth/image-viewer";
-import { anchorSphereCamera, projectSphereRay, sphereRay, sphereViewBasis, type SphereCamera, type SpherePoint } from "@foss-earth/image-viewer";
-import { createSphereSurfaceRenderer, sphereSurfaceVariant, type SphereSampling, type SphereSurfaceDraw, type SphereSurfaceKind, type SphereSurfaceSource } from "@foss-earth/image-viewer/babylon";
+import { createLookModel, createSphereCameraTarget, createSphereSlot, type LookSettings } from "@foss-earth/sphere-image";
+import { anchorSphereCamera, projectSphereRay, sphereRay, sphereViewBasis, type SphereCamera, type SpherePoint } from "@foss-earth/sphere-image";
+import { createSphereSurfaceRenderer, sphereSurfaceVariant, type SphereSampling, type SphereSurfaceDraw, type SphereSurfaceKind, type SphereSurfaceSource } from "@foss-earth/sphere-image/babylon";
 
 const FACE_COLOR: Record<CubeFaceName, [number, number, number]> = {
   px: [255, 0, 0], nx: [0, 255, 0], py: [0, 0, 255], ny: [255, 255, 0], pz: [0, 255, 255], nz: [255, 0, 255],
