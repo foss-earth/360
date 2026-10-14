@@ -47,7 +47,7 @@ export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
   function render(status:ViewerStatus):void {
     if(disposed)return;
     const id=["preparing","entering","immersive"].includes(status.phase)? status.active??status.target:null;
-    const entry=id?ports.image(id):null, title=entry?`360: ${entry.title}`:null,onScreen=!!entry&&status.active!==null;
+    const entry=id?ports.image(id):null, title=entry?.title??null,onScreen=!!entry&&status.active!==null;
     if(title!==snapshot.title||onScreen!==snapshot.onScreen){snapshot={title,onScreen};for(const listener of [...listeners])listener();}
     const reading=ports.detail(status), key=JSON.stringify([status.phase,status.active,entry,reading]);
     if(key===rendered)return;rendered=key;

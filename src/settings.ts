@@ -1,7 +1,7 @@
 import type { DeviceContext, ParameterBounds, ParameterSpec, ParameterUnit } from "@foss-earth/ui/settings";
 
 export const SCENES_TAB = "scenes";
-/** The tab of the sphere on screen, titled "360: <title>". */
+/** The tab of the sphere on screen, titled with its image's title. */
 export const SPHERE_TAB = "panorama";
 /** Shown only inside a sphere. */
 export const SPHERE_SETTINGS_TAB = "panorama-settings";
