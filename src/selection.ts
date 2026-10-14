@@ -1,7 +1,7 @@
 import type { ImageRepresentation } from "@foss-earth/images";
 import type { ViewerRepresentation } from "./catalogue.js";
-import { previewFaceTexels, immersionFaceTexels } from "@foss-earth/cubemap/core";
-import type { TiledCubeRepresentationRecord } from "@foss-earth/tiled-cubemap";
+import { previewFaceTexels, immersionFaceTexels } from "@foss-earth/sphere-cubemap/core";
+import type { TiledCubeRepresentationRecord } from "@foss-earth/sphere-tiled-cubemap";
 import type { ViewerImageInput } from "./ports.js";
 import type { ViewerResources } from "./viewer.js";
 export interface RepresentationChoice<R extends ImageRepresentation> {

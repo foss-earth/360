@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createImageSessionBroker, createImageSourceCache } from "@foss-earth/images";
 import { createImageFileService } from "@foss-earth/images/browser";
 import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "../src/resources.js";
-import type { CubeRepresentationRecord } from "@foss-earth/cubemap";
+import type { CubeRepresentationRecord } from "@foss-earth/sphere-cubemap";
 import { deferred, flush, image } from "./fixtures/viewer.js";
 it("retains the actual common decoder input after resource retirement and releases a late bitmap", async () => {
   const broker = createImageSessionBroker({ requests: 1, decodes: 1, pools: { sourceGpu: 1e6, decoded: 1e6, encoded: 1e6, overlap: 1e6, uploadOutstanding: 1e6 } });

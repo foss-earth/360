@@ -16,6 +16,8 @@ export function createGlobeViewerInput(
   engineLeaseFor: (lease: ViewerNavigationLease) => NavigationLease, ports: {
     nowMs(): number; controlTakesKey: Parameters<typeof attachLookInput>[0]["controlTakesKey"];
     abortReason(): unknown; signal?: AbortSignal; onRetirementError?(error: unknown): void;
+    /** Client rectangle of the measured view. Pointers convert into it instead of the whole canvas. */
+    surfaceRect?: () => { left: number; top: number; width: number; height: number } | null;
   },
 ) {
   let disposed = false;
@@ -38,6 +40,11 @@ export function createGlobeViewerInput(
         inputMode: () => { const mode = runtime.getInputMode(); return mode === "touch" ? "auto" : mode; },
         safariGestures: isSafariGestureSupported({ userAgent: hostWindow.navigator.userAgent, hasGestureEvent: "GestureEvent" in hostWindow }),
         precedingWheelMs: wheels.lastEventMs(),
+        localPoint: ports.surfaceRect ? (clientX, clientY) => {
+          const rect = ports.surfaceRect?.();
+          if (!rect || !(rect.width > 0 && rect.height > 0)) return null;
+          return { x: clientX - rect.left, y: clientY - rect.top };
+        } : undefined,
       });
       let off: () => void;
       try { off = runtime.setNavigationIntentHandler(engineLeaseFor(lease), frame => look.applyIntents(frame)); }

@@ -6,19 +6,19 @@ let pureImport=true;
 registerHooks({resolve(specifier,context,next){if(pureImport&&(specifier.startsWith("@felipegalind0/gamepad-tools")||specifier.startsWith("@foss-earth/engine")))throw new Error("PURE_IMPORT_TOUCHED_CONTROLLER_OR_ENGINE_RUNTIME");return next(specifier,context);}});
 const names=["window","document","navigator","ImageBitmap","OffscreenCanvas","HTMLCanvasElement"],previous=names.map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)]);
 for(const name of names)Object.defineProperty(globalThis,name,{configurable:true,get(){throw new Error(`PURE_IMPORT_TOUCHED_${name}`);}});
-const root=await import("@foss-earth/360");assert.equal(typeof root.createViewerSelection,"function");
-const pureCore=await import("@foss-earth/360/core");assert.equal(pureCore.PANORAMA_GAMEPAD_ACTIONS,root.PANORAMA_GAMEPAD_ACTIONS);assert.equal(pureCore.createPanoramaProfileContribution,root.createPanoramaProfileContribution);
+const root=await import("@foss-earth/image-viewer");assert.equal(typeof root.createViewerSelection,"function");
+const pureCore=await import("@foss-earth/image-viewer/core");assert.equal(pureCore.SPHERE_GAMEPAD_ACTIONS,root.SPHERE_GAMEPAD_ACTIONS);assert.equal(pureCore.createSphereProfileContribution,root.createSphereProfileContribution);
 await assert.rejects(import("@felipegalind0/gamepad-tools/core"),/PURE_IMPORT_TOUCHED_CONTROLLER_OR_ENGINE_RUNTIME/);
-assert.deepEqual(root.PANORAMA_GAMEPAD_ACTIONS,[
+assert.deepEqual(root.SPHERE_GAMEPAD_ACTIONS,[
   {id:"panorama.lookX",label:"Look left / right",category:"Panorama",kind:"rate",range:[-1,1],contexts:["panorama"],available:true},
   {id:"panorama.lookY",label:"Look down / up",category:"Panorama",kind:"rate",range:[-1,1],contexts:["panorama"],available:true},
   {id:"panorama.zoom",label:"Zoom in / out",category:"Panorama",kind:"rate",range:[-1,1],contexts:["panorama"],available:true},
   {id:"panorama.exit",label:"Exit the panorama",category:"Panorama",kind:"command",contexts:["panorama"],available:true},
 ]);
-assert.equal(typeof(await import("@foss-earth/360/viewer")).createImageViewer,"function");
-assert.equal(typeof(await import("@foss-earth/360/settings")).VIEWER_PARAMETERS,"object");
-const viewerSettings=await import("@foss-earth/360/settings");
-assert.deepEqual(viewerSettings.VIEWER_EXPERIMENT_IDS,{panoramaBookkeeping:"renderer.experiments.panoramaBookkeeping",opaqueImmersion:"renderer.experiments.opaqueImmersion",panoramaShaders:"renderer.experiments.panoramaShaders"});
+assert.equal(typeof(await import("@foss-earth/image-viewer/viewer")).createImageViewer,"function");
+assert.equal(typeof(await import("@foss-earth/image-viewer/settings")).VIEWER_PARAMETERS,"object");
+const viewerSettings=await import("@foss-earth/image-viewer/settings");
+assert.deepEqual(viewerSettings.VIEWER_EXPERIMENT_IDS,{sphereBookkeeping:"renderer.experiments.panoramaBookkeeping",opaqueImmersion:"renderer.experiments.opaqueImmersion",sphereShaders:"renderer.experiments.panoramaShaders"});
 assert.deepEqual(viewerSettings.VIEWER_EXPERIMENT_PARAMETERS.map(spec=>spec.id),Object.values(viewerSettings.VIEWER_EXPERIMENT_IDS));
 assert.deepEqual(viewerSettings.VIEWER_EXPERIMENT_PARAMETERS.map(spec=>spec.label),["Panorama draws without test records","Opaque panorama","Simpler panorama shaders"]);
 assert.deepEqual(viewerSettings.VIEWER_EXPERIMENT_PARAMETERS.map(spec=>spec.description),[
@@ -37,7 +37,7 @@ pureImport=false;
 for(const[name,descriptor]of previous){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else delete globalThis[name];}
 const {DEFAULT_BINDING_TRANSFORM}=await import("@felipegalind0/gamepad-tools/core");
 const {createStandardGlobeProfile,createGlobeGamepadAdapter}=await import("@foss-earth/engine/gamepad");
-const contribution=root.createPanoramaProfileContribution(DEFAULT_BINDING_TRANSFORM);
+const contribution=root.createSphereProfileContribution(DEFAULT_BINDING_TRANSFORM);
 assert.deepEqual(contribution.contexts,["panorama"]);
 const expectedBindings=(slot,deadzone)=>[
   {id:"standard-panorama-look-x",actionId:"panorama.lookX",kind:"single",semantics:"rate",contexts:["panorama"],enabled:true,precedence:0,transform:{...DEFAULT_BINDING_TRANSFORM,deadzone,invert:false},source:{selector:{kind:"gamepad-axis",gamepadSlot:slot,axisIndex:2}}},
@@ -49,24 +49,24 @@ assert.deepEqual(contribution.bindings(3,.21),expectedBindings(3,.21));
 const controllerProfile=createStandardGlobeProfile(undefined,undefined,contribution);
 assert.deepEqual(controllerProfile.contexts,["globe","panorama"]);
 assert.deepEqual(controllerProfile.bindings.filter(binding=>binding.contexts.includes("panorama")),expectedBindings(0,.15));
-const adapter=createGlobeGamepadAdapter({applyGlobeNavigationIntents(){}},{featureActions:root.PANORAMA_GAMEPAD_ACTIONS,getContext:()=>"panorama"});
-assert.deepEqual(adapter.actions.filter(action=>action.contexts.includes("panorama")),root.PANORAMA_GAMEPAD_ACTIONS);assert.equal(adapter.getContext(),"panorama");
+const adapter=createGlobeGamepadAdapter({applyGlobeNavigationIntents(){}},{featureActions:root.SPHERE_GAMEPAD_ACTIONS,getContext:()=>"panorama"});
+assert.deepEqual(adapter.actions.filter(action=>action.contexts.includes("panorama")),root.SPHERE_GAMEPAD_ACTIONS);assert.equal(adapter.getContext(),"panorama");
 await assert.rejects(import("__OUTSIDE_IMPORT__",{with:{type:"json"}}),/OUTSIDE_INSTALLED_WORKSPACE/);
-for(const entry of ["@foss-earth/360/resources","@foss-earth/360/input","@foss-earth/360/panels","@foss-earth/360/babylon","@foss-earth/360/shaders","@foss-earth/360/shaders-webgl","@foss-earth/360/core","@foss-earth/360/node"]){await import(entry);assert(import.meta.resolve(entry).includes("node_modules/"));}
-const {preparePanorama}=await import("@foss-earth/360/preparation");mkdirSync("prepared",{recursive:true});writeFileSync("pose.json",JSON.stringify({headingDeg:37,pitchDeg:-4,rollDeg:12,provenance:"injected fixture author"}));
-const output=preparePanorama(["--input","synthetic:cardinal:64","--pose","pose.json","--attribution","Fixture photographer","--preview-face-sizes","8,16","--immersion-widths","64","--tiles","eac,cube","--tile-size","8","--tile-face-size","16","--encoding","png","--out","prepared"],{log:()=>{}});
+for(const entry of ["@foss-earth/image-viewer/resources","@foss-earth/image-viewer/input","@foss-earth/image-viewer/panels","@foss-earth/image-viewer/babylon","@foss-earth/image-viewer/shaders","@foss-earth/image-viewer/shaders-webgl","@foss-earth/image-viewer/core","@foss-earth/image-viewer/node"]){await import(entry);assert(import.meta.resolve(entry).includes("node_modules/"));}
+const {prepareSphere}=await import("@foss-earth/image-viewer/preparation");mkdirSync("prepared",{recursive:true});writeFileSync("pose.json",JSON.stringify({headingDeg:37,pitchDeg:-4,rollDeg:12,provenance:"injected fixture author"}));
+const output=prepareSphere(["--input","synthetic:cardinal:64","--pose","pose.json","--attribution","Fixture photographer","--preview-face-sizes","8,16","--immersion-widths","64","--tiles","eac,cube","--tile-size","8","--tile-face-size","16","--encoding","png","--out","prepared"],{log:()=>{}});
 assert.equal(output.exitCode,0);assert.equal(output.fragment.asset.representations.length,5);assert.equal(output.provenance.toolVersion,"1");assert.equal(JSON.parse(readFileSync("prepared/asset.fragment.json")).imagePose.headingDeg,37);
-const cli=spawnSync(process.execPath,[...process.execArgv,new URL(import.meta.resolve("@foss-earth/360/prepare-cli")).pathname,"--help"],{encoding:"utf8"});assert.equal(cli.status,0,cli.stderr);assert.match(cli.stdout,/synthetic:cardinal/);
+const cli=spawnSync(process.execPath,[...process.execArgv,new URL(import.meta.resolve("@foss-earth/image-viewer/prepare-cli")).pathname,"--help"],{encoding:"utf8"});assert.equal(cli.status,0,cli.stderr);assert.match(cli.stdout,/synthetic:cardinal/);
 const {JSDOM}=await import("jsdom"),doc=new JSDOM("<!doctype html>").window.document;
-const {createViewerTabs}=await import("@foss-earth/360/panels");let phase="immersive",subscriber;let stopped=0;
+const {createViewerTabs}=await import("@foss-earth/image-viewer/panels");let phase="immersive",subscriber;let stopped=0;
 const input={id:"placed",title:"Published image",asset:output.fragment.asset,pose:output.fragment.imagePose,placement:{marker:null,radiusMeters:1,content:[[1,0,0],[0,1,0],[0,0,1]],outline:null,hoverScale:1},credits:{text:"Injected photographer"},actions:[]};
 {
   // Actual public resource composition delegates each source's current policy
   // to the real tiled owner, using common acquisition for the shared preview.
   const {createImageSessionBroker,createImageSourceCache}=await import("@foss-earth/images");
   const {createImageFileService}=await import("@foss-earth/images/browser");
-  const {tileAtlasLayout}=await import("@foss-earth/tiled-cubemap");
-  const {createViewerResources}=await import("@foss-earth/360/resources");
+  const {tileAtlasLayout}=await import("@foss-earth/sphere-tiled-cubemap");
+  const {createViewerResources}=await import("@foss-earth/image-viewer/resources");
   const broker=createImageSessionBroker({requests:2,decodes:1,pools:{encoded:1000,decoded:1000,sourceGpu:1e6,overlap:1e6,uploadOutstanding:1000}});
   const cache=createImageSourceCache({broker,keptGpuBytes:0,gpuBytes:source=>source.gpuBytes});
   const png=new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,6,0,0,0,0,0,0,0]);
@@ -102,8 +102,8 @@ const input={id:"placed",title:"Published image",asset:output.fragment.asset,pos
   // its preview's service instead of inheriting the tile group's saved files.
   const {createImageSessionBroker,createImageSourceCache,mediaGroup}=await import("@foss-earth/images");
   const {createImageFileService}=await import("@foss-earth/images/browser");
-  const {tileAtlasLayout}=await import("@foss-earth/tiled-cubemap");
-  const {createViewerResources}=await import("@foss-earth/360/resources");
+  const {tileAtlasLayout}=await import("@foss-earth/sphere-tiled-cubemap");
+  const {createViewerResources}=await import("@foss-earth/image-viewer/resources");
   const broker=createImageSessionBroker({requests:2,decodes:1,pools:{encoded:1000,decoded:1000,sourceGpu:1e6,overlap:1e6,uploadOutstanding:1000}});
   const cache=createImageSourceCache({broker,keptGpuBytes:0,gpuBytes:source=>source.gpuBytes});
   const png=new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,6,0,0,0,0,0,0,0]);
@@ -140,7 +140,7 @@ const input={id:"placed",title:"Published image",asset:output.fragment.asset,pos
   }finally{for(const handle of handles)handle.release();cache.dispose();broker.dispose();}
   for(let n=0;n<20;n++)await Promise.resolve();assert.deepEqual(broker.pools.live(),[]);
 }
-const {createImageViewer}=await import("@foss-earth/360/viewer"),engine=await import("@foss-earth/engine/core");
+const {createImageViewer}=await import("@foss-earth/image-viewer/viewer"),engine=await import("@foss-earth/engine/core");
 let released=0,detached=0,framesHeld=0;const abort=new AbortController(),hold=()=>{framesHeld++;let live=true;return()=>{if(live){live=false;framesHeld--;}};};
 const lease={overview:{version:1,view:{lonDeg:0,latDeg:0,headingDeg:0,pitchDeg:0,zoomMeters:100},camera:{center:{x:0,y:0,z:0},yaw:0,pitch:Math.PI/2,radius:100,fov:Math.PI/3}},signal:abort.signal,released:false,setPresentationView(){},holdRendering:hold,release(){this.released=true;abort.abort();}};
 let residencyChoice=null;
@@ -232,8 +232,8 @@ let resolveLate;acquire=()=>new Promise(resolve=>{resolveLate=resolve;});const s
   // host reading is actual public viewer residency, never private preparation.
   const {createImageSessionBroker,createImageSourceCache}=await import("@foss-earth/images");
   const {createImageFileService}=await import("@foss-earth/images/browser");
-  const {tileAtlasLayout}=await import("@foss-earth/tiled-cubemap");
-  const {createViewerResources}=await import("@foss-earth/360/resources");
+  const {tileAtlasLayout}=await import("@foss-earth/sphere-tiled-cubemap");
+  const {createViewerResources}=await import("@foss-earth/image-viewer/resources");
   const leaves=error=>error instanceof AggregateError?Array.from(error.errors).flatMap(leaves):[error];
   async function fallbackCase(mode){
     const broker=createImageSessionBroker({requests:2,decodes:1,pools:{encoded:1000,decoded:1000,sourceGpu:1e6,overlap:1e6,uploadOutstanding:1000}});
@@ -357,5 +357,5 @@ let resolveLate;acquire=()=>new Promise(resolve=>{resolveLate=resolve;});const s
   await settlementCase("published");await settlementCase("private");
 }
 const tabs=createViewerTabs({document:doc,viewer:{status:()=>({phase,active:"placed",target:null}),subscribe(fn){subscriber=fn;return()=>{stopped++;};},exit(){phase="overview";subscriber({phase,active:null,target:null});},activateAction:async()=>false},image:()=>input,sectionTitle:(_tab,section)=>section,parameterSection({main}){const element=doc.createElement("div");if(main)element.append(main);return{element,destroy:()=>{}};},sections(entries){const element=doc.createElement("div");element.append(...entries.map(entry=>entry.element));return{element,destroy:()=>{}};},representationText:record=>record.id,detail:()=>null});
-assert.equal(tabs.getSnapshot().title,"360: Published image");assert.doesNotMatch(tabs.panorama.textContent,/Injected photographer|Taken at|Pose:/);assert.equal(input.credits.text,"Injected photographer");tabs.leave();assert.equal(tabs.getSnapshot().title,null);tabs.destroy();tabs.destroy();assert.equal(stopped,1);
+assert.equal(tabs.getSnapshot().title,"360: Published image");assert.doesNotMatch(tabs.sphere.textContent,/Injected photographer|Taken at|Pose:/);assert.equal(input.credits.text,"Injected photographer");tabs.leave();assert.equal(tabs.getSnapshot().title,null);tabs.destroy();tabs.destroy();assert.equal(stopped,1);
 console.log("360 installed exports, pure import, preparation CLI and injected panel lifecycle passed");

@@ -12,7 +12,7 @@ const SETTINGS: LookSettings = {
   fovRangeDeg: { min: 35, max: 90 }, pitchRangeDeg: { min: -85, max: 85 }, reducedMotion: false,
 };
 
-describe("panorama look input", () => {
+describe("sphere look input", () => {
   it("exits on Escape but not while typing, and sends controller look and exit to the model", () => {
     const canvas = document.createElement("canvas");
     document.body.append(canvas);
@@ -37,7 +37,7 @@ describe("panorama look input", () => {
     expect(onExit).toHaveBeenCalledTimes(2);
   });
 
-  it("leaves a focused slider its arrow keys, and the rest to the panorama", () => {
+  it("leaves a focused slider its arrow keys, and the rest to the sphere", () => {
     const canvas = document.createElement("canvas");
     document.body.append(canvas);
     const onExit = vi.fn();
@@ -50,7 +50,7 @@ describe("panorama look input", () => {
     slider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     expect(model.moving()).toBe(false);
     slider.dispatchEvent(new KeyboardEvent("keyup", { key: "ArrowLeft", bubbles: true }));
-    // A slider has no use for Escape: it still leaves the panorama.
+    // A slider has no use for Escape: it still leaves the sphere.
     slider.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(onExit).toHaveBeenCalledTimes(1);
     // A button keeps Space and Enter, so the arrows look.
@@ -62,7 +62,7 @@ describe("panorama look input", () => {
   });
 });
 
-describe("panorama wheel input", () => {
+describe("sphere wheel input", () => {
   const wheel = (init: WheelEventInit) => new WheelEvent("wheel", { bubbles: true, cancelable: true, ...init });
   const attach = (mode: "trackpad" | "mouse") => {
     const canvas = document.createElement("canvas");

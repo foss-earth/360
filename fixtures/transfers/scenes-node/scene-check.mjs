@@ -5,8 +5,8 @@ import { checkImage } from "@foss-earth/images";
 import { validateScene } from "@foss-earth/scenes";
 import { createPreviewSheetsExtensionHook } from "@foss-earth/preview-sheets/scene-extension";
 import { PREVIEW_SHEETS_EXTENSION, verifyPreviewSheets } from "@foss-earth/preview-sheets/preparation";
-import { tiledCubeFilesWithLevel } from "@foss-earth/tiled-cubemap";
-import { createBuiltInRepresentations, validateViewerAsset } from "@foss-earth/360";
+import { tiledCubeFilesWithLevel } from "@foss-earth/sphere-tiled-cubemap";
+import { createBuiltInRepresentations, validateViewerAsset } from "@foss-earth/image-viewer";
 
 const within = (folder, file) => { const relative = path.relative(folder, file); return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); };
 /** Both decoded URL traversal and symlinks must remain inside the supplied local folder. */
@@ -87,8 +87,8 @@ export function checkSceneManifest(manifestPath, options = {}) {
     return url ? { path: problem.path, message: `${url} is outside ${new URL(".", baseUrl).href}, so it cannot be read from the manifest folder` } : problem;
   });
   report.summary = { id: scene.id, revision: scene.revision, title: scene.title, manifestBytes: scene.manifestBytes,
-    panoramas: scene.panoramas.size, unsupported: scene.unsupported.size, assets: scene.assets.size, groups: scene.groups.length,
-    links: [...scene.panoramas.values()].reduce((sum, entity) => sum + entity.links.length, 0),
+    spheres: scene.spheres.size, unsupported: scene.unsupported.size, assets: scene.assets.size, groups: scene.groups.length,
+    links: [...scene.spheres.values()].reduce((sum, entity) => sum + entity.links.length, 0),
     files: files.files, mediaBytes: files.bytes, largestFile: files.largestFile, sheets: sheetRecords.size,
     sheetCubes: [...scene.assets.values()].reduce((sum, asset) => sum + asset.representations.filter(rep => !!rep.sheet).length, 0),
     sheetLowestPsnrDb: Number.isFinite(sheets.lowestPsnrDb) ? Math.round(sheets.lowestPsnrDb*10)/10 : null };

@@ -6,3 +6,8 @@ export * from "./catalogue.js";
 export * from "./selection.js";
 export * from "./views.js";
 export * from "./gamepad.js";
+export * from "./rectangleCamera.js";
+export * from "./rectangleSession.js";
+export * from "./sphereCamera.js";
+export * from "./sphereSession.js";
+export * from "./cameraTarget.js";

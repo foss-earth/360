@@ -1,16 +1,16 @@
 import type { DeviceContext, ParameterBounds, ParameterSpec, ParameterUnit } from "@foss-earth/ui/settings";
 
 export const SCENES_TAB = "scenes";
-/** The tab of the panorama on screen, titled "360: <title>". */
-export const PANORAMA_TAB = "panorama";
-/** Shown only inside a panorama. */
-export const PANORAMA_SETTINGS_TAB = "panorama-settings";
+/** The tab of the sphere on screen, titled "360: <title>". */
+export const SPHERE_TAB = "panorama";
+/** Shown only inside a sphere. */
+export const SPHERE_SETTINGS_TAB = "panorama-settings";
 
 /** Viewer-owned experiments retain their existing Renderer tab home. */
 export const VIEWER_EXPERIMENT_IDS = {
-  panoramaBookkeeping: "renderer.experiments.panoramaBookkeeping",
+  sphereBookkeeping: "renderer.experiments.panoramaBookkeeping",
   opaqueImmersion: "renderer.experiments.opaqueImmersion",
-  panoramaShaders: "renderer.experiments.panoramaShaders",
+  sphereShaders: "renderer.experiments.panoramaShaders",
 } as const;
 
 const EXPERIMENT_REASON = "Under A/B validation: meant to draw the same picture with less work, not yet confirmed on devices.";
@@ -19,7 +19,7 @@ const experimentHome = { tab: "renderer", section: "experiments", level: "main" 
 /** The Renderer section displays these records; 360 owns their behavior. */
 export const VIEWER_EXPERIMENT_PARAMETERS: readonly ParameterSpec[] = [
   {
-    id: VIEWER_EXPERIMENT_IDS.panoramaBookkeeping,
+    id: VIEWER_EXPERIMENT_IDS.sphereBookkeeping,
     label: "Panorama draws without test records",
     description: "Stops recording every panorama draw, its camera as text and earlier frames' uniforms, which only the renderer's own checks read; a check turns recording back on. Review candidate 5.",
     unit: "none",
@@ -43,7 +43,7 @@ export const VIEWER_EXPERIMENT_PARAMETERS: readonly ParameterSpec[] = [
     source: "src/engine/babylon/panorama/panoramaRenderer.ts",
   },
   {
-    id: VIEWER_EXPERIMENT_IDS.panoramaShaders,
+    id: VIEWER_EXPERIMENT_IDS.sphereShaders,
     label: "Simpler panorama shaders",
     description: "WebGL only: works out each orb's per-draw constants once on the CPU instead of in every pixel, turns the panorama's view into the image's frame in the vertex shader, and normalizes each ray once or, for a cube, not at all. Review candidate 7.",
     unit: "none",
@@ -73,7 +73,7 @@ function textureSideBounds(min: number, cap: number): (context: DeviceContext) =
 /** WebGPU's default largest texture side, assumed until the renderer reports its own. */
 const DEFAULT_TEXTURE_SIDE = 8192;
 
-/** The widest whole panorama the renderer can hold: an equirectangular image as wide as its texture limit. */
+/** The widest whole sphere the renderer can hold: an equirectangular image as wide as its texture limit. */
 function widestImage(context: DeviceContext): { width: number; from: string } {
   return context.maxTextureSize
     ? { width: context.maxTextureSize, from: `this renderer's ${context.maxTextureSize} px texture limit` }
@@ -158,7 +158,7 @@ const APPEARANCE: readonly ParameterSpec[] = [
 ];
 
 /**
- * Scenes → Motion: the animations between the globe and a panorama, and the
+ * Scenes → Motion: the animations between the globe and a sphere, and the
  * reduced-motion choice that governs them all. They play on the globe side
  * too, so they stay where the globe can reach them.
  */
@@ -201,8 +201,8 @@ const MOTION: readonly ParameterSpec[] = [
 
 const TILE_EVIDENCE = "benchmarks/eac-progressive-prototype";
 
-/** The panorama's tab → Image detail: the one control the tab has, beside what it shows and why. */
-const PANORAMA: readonly ParameterSpec[] = [
+/** The sphere's tab → Image detail: the one control the tab has, beside what it shows and why. */
+const SPHERE: readonly ParameterSpec[] = [
   {
     id: "scene.panorama.immersionWidth", label: "Image detail",
     description: "The widest image loaded inside a panorama, in pixels around the whole turn: an equirectangular image's width, or four cube faces. The largest image a panorama offers up to this is shown, within the memory budgets; at its largest, only the renderer's texture limit applies.",
@@ -215,12 +215,12 @@ const PANORAMA: readonly ParameterSpec[] = [
       return { value: width, derivedFrom: from };
     },
     defaultReason: "The most detailed image: each panorama opens at the largest image it offers. Lower it to spend less memory and download.",
-    home: { tab: PANORAMA_TAB, section: "detail", level: "main" }, appliesLive: true, source: LOADER,
+    home: { tab: SPHERE_TAB, section: "detail", level: "main" }, appliesLive: true, source: LOADER,
   },
 ];
 
-/** 360 image settings: what matters only inside a panorama. */
-const PANORAMA_SETTINGS: readonly ParameterSpec[] = [
+/** 360 image settings: what matters only inside a sphere. */
+const SPHERE_SETTINGS: readonly ParameterSpec[] = [
   {
     id: "scene.panorama.representation", label: "Representation",
     description: "How the photograph arrives inside a panorama, where the panorama offers more than one kind. Tiles load the part of the view that needs them, at the detail it needs, so the view sharpens in a second or two; a whole image is sharp only once all of it has arrived. A panorama without the chosen kind shows the kind it has.",
@@ -232,54 +232,54 @@ const PANORAMA_SETTINGS: readonly ParameterSpec[] = [
     ],
     default: "equi-angular-tiles",
     defaultReason: `Measured in ${TILE_EVIDENCE}: at 2 Mbit/s the view was within 1 dB of finished in 1.3 s with equi-angular tiles, where whole images of 4.7 and 5.5 MiB took 20 s and more; and cube tiles needed 15% more bytes for the same quality.`,
-    home: { tab: PANORAMA_SETTINGS_TAB, section: "image", level: "main" }, appliesLive: true, source: LOADER,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "image", level: "main" }, appliesLive: true, source: LOADER,
   },
   {
     id: "scene.panorama.immersionDensity", label: "Sharpness target",
     description: "Off, a panorama shows the largest image its image detail allows. A number loads instead the smallest image that gives this many image texels per rendered pixel at the centre of the view, which saves memory and download on small screens.",
     unit: TEXELS_PER_PX, kind: "number", named: [{ id: "off", label: "Off" }], bounds: () => ({ min: 0.25, max: 4 }), step: 0.25, scale: "log2",
     default: "off", defaultReason: "Off: the most detailed image, as the image detail asks.",
-    home: { tab: PANORAMA_SETTINGS_TAB, section: "image", level: "main" }, appliesLive: true, source: LOADER,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "image", level: "main" }, appliesLive: true, source: LOADER,
   },
   {
     id: "scene.panorama.verticalFovRange", label: "Zoom range", description: "The narrowest and widest vertical view inside a panorama.",
     unit: "deg", kind: "range", bounds: () => ({ min: 10, max: 179, reason: "A flat view cannot show 180°, which scene views and history reject, and below 10° it magnifies past most sources." }), step: 1,
     default: { min: 20, max: 120 }, defaultReason: "As asked: close enough at 20° to look at detail, wide enough at 120° to take in most of the scene at once.",
-    home: { tab: PANORAMA_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: INPUT,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: INPUT,
   },
   {
     id: "scene.panorama.pitchRange", label: "Look up and down", description: "How far below and above the horizon you may look inside a panorama.",
     unit: "deg", kind: "range", bounds: () => ({ min: -89.9, max: 89.9, reason: "Looking exactly up or down leaves no heading to turn about." }), step: 0.1,
     default: { min: -85, max: 85 }, defaultReason: "Avoids the degenerate straight-up and straight-down looks.",
-    home: { tab: PANORAMA_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: INPUT,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: INPUT,
   },
   quantity({
-    id: "scene.panorama.dragSensitivity", label: "Drag to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.dragSensitivity", label: "Drag to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How far the view turns for each CSS pixel you drag inside a panorama.", reason: "A starting pointer gain; user trial pending.", source: INPUT,
   }),
   quantity({
-    id: "scene.panorama.swipeSensitivity", label: "Swipe to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.swipeSensitivity", label: "Swipe to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How far the view turns for each CSS pixel a two-finger trackpad swipe scrolls inside a panorama, with the input method set to Trackpad.",
     reason: "The same as dragging; user trial pending.", source: INPUT,
   }),
   quantity({
-    id: "scene.panorama.lookRate", label: "Key and stick look", unit: "deg/s", min: 1, max: 360, fallback: 90, scale: "log2", step: 0.1, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.lookRate", label: "Key and stick look", unit: "deg/s", min: 1, max: 360, fallback: 90, scale: "log2", step: 0.1, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How fast arrow keys and a fully pushed stick turn the view.", reason: "A quarter turn a second.", source: INPUT,
   }),
   quantity({
-    id: "scene.panorama.zoomPerNotch", label: "Wheel zoom", unit: "per-notch", min: 0.01, max: 1, fallback: 0.1, scale: "log2", step: 0.1, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.zoomPerNotch", label: "Wheel zoom", unit: "per-notch", min: 0.01, max: 1, fallback: 0.1, scale: "log2", step: 0.1, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How much one wheel notch narrows or widens the view, as a fraction of the view's tangent.", reason: "A tenth: multiplicative steps.", source: INPUT,
   }),
   quantity({
-    id: "scene.panorama.zoomRate", label: "Key and trigger zoom", unit: "per-s", min: 0.01, max: 4, fallback: 0.5, scale: "log2", step: 0.1, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.zoomRate", label: "Key and trigger zoom", unit: "per-s", min: 0.01, max: 4, fallback: 0.5, scale: "log2", step: 0.1, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How fast held keys and triggers zoom, as a fraction of the view's tangent per second.", reason: "Halves or doubles the tangent in about 1.4 s.", source: INPUT,
   }),
   quantity({
-    id: "scene.panorama.pinchGain", label: "Pinch zoom", unit: "ratio", min: 0.1, max: 4, fallback: 1, scale: "log2", step: 0.1, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.pinchGain", label: "Pinch zoom", unit: "ratio", min: 0.1, max: 4, fallback: 1, scale: "log2", step: 0.1, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How strongly spreading two fingers narrows the view; 1 keeps the image under your fingers.", reason: "One to one with finger separation.", source: INPUT,
   }),
   quantity({
-    id: "scene.panorama.inertiaHalfLife", label: "Look glide", unit: "ms", min: 0, max: 1000, fallback: 100, step: 10, tab: PANORAMA_SETTINGS_TAB, section: "looking",
+    id: "scene.panorama.inertiaHalfLife", label: "Look glide", unit: "ms", min: 0, max: 1000, fallback: 100, step: 10, tab: SPHERE_SETTINGS_TAB, section: "looking",
     description: "How long the view keeps turning after a drag, as the time for its speed to halve; 0 stops at once.", reason: "A brief optional continuation.", source: INPUT,
   }),
   {
@@ -290,24 +290,24 @@ const PANORAMA_SETTINGS: readonly ParameterSpec[] = [
       { id: "authored", label: "The scene's view", description: "Turn to the panorama's suggested view." },
     ],
     default: "level-current", defaultReason: "Keeps your bearing; a scene's view may be applied from the list.",
-    home: { tab: PANORAMA_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
   },
   {
     id: "scene.panorama.entryFov", label: "Field of view",
     description: "How much of a panorama you see, top to bottom, once you have entered it from the map, within the zoom range. The map's keeps the field of view the map had; the scene's view, when chosen above, brings its own.",
     unit: "deg", kind: "number", named: [{ id: "map", label: "The map's" }], bounds: () => ({ min: 10, max: 179 }), step: 1, scale: "linear",
     default: 100, defaultReason: "As asked: wide enough to see where you are as soon as you arrive.",
-    home: { tab: PANORAMA_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
   },
   quantity({
-    id: "scene.panorama.orientDuration", label: "Levelling", unit: "ms", min: 0, max: 2000, fallback: 250, step: 10, tab: PANORAMA_SETTINGS_TAB, section: "entering",
+    id: "scene.panorama.orientDuration", label: "Levelling", unit: "ms", min: 0, max: 2000, fallback: 250, step: 10, tab: SPHERE_SETTINGS_TAB, section: "entering",
     description: "How long the view takes to level, turn or zoom to its field of view after entering.", reason: "A separate, short levelling phase.", source: LOADER,
   }),
 ];
 
-export const VIEWER_PARAMETERS: readonly ParameterSpec[] = [...APPEARANCE, ...MOTION, ...PANORAMA, ...PANORAMA_SETTINGS, ...VIEWER_EXPERIMENT_PARAMETERS];
+export const VIEWER_PARAMETERS: readonly ParameterSpec[] = [...APPEARANCE, ...MOTION, ...SPHERE, ...SPHERE_SETTINGS, ...VIEWER_EXPERIMENT_PARAMETERS];
 export const VIEWER_SECTION_TITLES: ReadonlyArray<readonly [string, string, string]> = [
   [SCENES_TAB, "appearance", "Orbs"], [SCENES_TAB, "motion", "Motion"],
-  [PANORAMA_TAB, "photograph", "Photograph"], [PANORAMA_TAB, "links", "Links"], [PANORAMA_TAB, "detail", "Image detail"],
-  [PANORAMA_SETTINGS_TAB, "image", "Image"], [PANORAMA_SETTINGS_TAB, "looking", "Looking"], [PANORAMA_SETTINGS_TAB, "entering", "Entering"],
+  [SPHERE_TAB, "photograph", "Photograph"], [SPHERE_TAB, "links", "Links"], [SPHERE_TAB, "detail", "Image detail"],
+  [SPHERE_SETTINGS_TAB, "image", "Image"], [SPHERE_SETTINGS_TAB, "looking", "Looking"], [SPHERE_SETTINGS_TAB, "entering", "Entering"],
 ];

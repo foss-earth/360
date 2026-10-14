@@ -1,7 +1,7 @@
 /**
- * Draws panorama orbs over the globe and the immersive view
+ * Draws sphere orbs over the globe and the immersive view
  * (docs/proposals/panorama-scenes.md §3): each orb is a quad whose
- * fragments cast the camera's own rays at a sphere, with depth where the ray
+ * fragments cast the camera's own rays at a ball, with depth where the ray
  * meets it, so terrain in front hides it; immersion is one triangle covering
  * the view. Every frame's uniforms are computed from the camera as it is for
  * that frame, in float64 on the CPU, immediately before the mesh draws.
@@ -53,7 +53,7 @@ import { IMMERSION_FRAGMENT_GLSL, IMMERSION_LEAN_UNIFORMS, IMMERSION_VERTEX_GLSL
 import { isBorrowedWebGpuEngine } from "@foss-earth/renderer/babylon";
 
 /** One frame's camera, as the globe is drawn with it: eye in float64 ECEF and the rotation-and-projection matrix. */
-export interface PanoramaCameraFrame {
+export interface SphereCameraFrame {
   eye: Vec3;
   viewRotProj: Matrix;
   inverseViewRotProj: Matrix;
@@ -94,17 +94,17 @@ export interface OrbExpansion {
   radiusMeters: number;
   /** 0: clipped by terrain like the orb; 1: drawn over everything. */
   reveal: number;
-  /** The image the overlay draws instead of the orb's preview, as a flight out of the panorama on screen starts from it. */
+  /** The image the overlay draws instead of the orb's preview, as a flight out of the sphere on screen starts from it. */
   source?: ImmersionSource | null;
 }
 
-export interface PanoramaOrb {
+export interface SphereOrb {
   readonly id: string;
   update(state: Partial<OrbState>): void;
-  /** Draws the orb as a sphere of the expansion's radius, with its overlay over everything, or stops with null. */
+  /** Draws the orb as a ball of the expansion's radius, with its overlay over everything, or stops with null. */
   setExpansion(expansion: OrbExpansion | null): void;
   /** The radius used this frame for silhouette, depth and picking. */
-  effectiveRadius(frame?: PanoramaCameraFrame): number | null;
+  effectiveRadius(frame?: SphereCameraFrame): number | null;
   dispose(): void;
 }
 
@@ -130,7 +130,7 @@ export interface ImmersionSource {
   tiles?: TiledSourceTextures;
 }
 
-export interface PanoramaImmersion {
+export interface SphereImmersion {
   /**
    * Draws `source` full screen; `next` blends in by `mix` for a crossfade.
    * `view` draws it with that view while the globe camera's still shows
@@ -147,59 +147,59 @@ export interface PanoramaImmersion {
 
 export interface OrbHit {
   id: string;
-  /** Metres from the eye to the sphere's near surface. */
+  /** Metres from the eye to the orb's near surface. */
   depthMeters: number;
   /** Whether the ray met the silhouette itself or only the enlarged pointer target. */
   onSilhouette: boolean;
 }
 
-export type PanoramaProbeOutput = "direction" | "ray";
+export type SphereProbeOutput = "direction" | "ray";
 
-export interface PanoramaProbeResult {
+export interface SphereProbeResult {
   width: number;
   height: number;
   /** Per output asked for, RGBA float32 rows as read back: xyz and coverage. */
-  outputs: Partial<Record<PanoramaProbeOutput, Float32Array>>;
+  outputs: Partial<Record<SphereProbeOutput, Float32Array>>;
   /** The camera frame every output was drawn with: one frame for all. */
-  frame: PanoramaCameraFrame;
+  frame: SphereCameraFrame;
 }
 
 /**
  * Changes meant to draw the same picture with less work, off until validated
  * (docs/validation/panorama-experiments.md). Each is a renderer.experiments.* parameter.
  */
-export interface PanoramaRendererExperiments {
+export interface SphereRendererExperiments {
   /** Draw records, camera revisions and earlier frames' uniforms only while a check captures or delays. */
   bookkeeping: boolean;
   /** Immersion at full opacity drawn without blending. */
   opaqueImmersion: boolean;
-  /** WebGL: the PANORAMA_LEAN shaders. WebGPU draws as before. */
+  /** WebGL: the SPHERE_LEAN shaders. WebGPU draws as before. */
   shaders: boolean;
 }
 
-export const NO_PANORAMA_EXPERIMENTS: Readonly<PanoramaRendererExperiments> = { bookkeeping: false, opaqueImmersion: false, shaders: false };
+export const NO_SPHERE_EXPERIMENTS: Readonly<SphereRendererExperiments> = { bookkeeping: false, opaqueImmersion: false, shaders: false };
 
-export interface PanoramaRenderer {
+export interface SphereRenderer {
   readonly available: boolean;
-  /** Why panoramas cannot be drawn, or null. */
+  /** Why spheres cannot be drawn, or null. */
   readonly unavailableReason: string | null;
-  addOrb(id: string, state: OrbState): PanoramaOrb;
-  readonly immersion: PanoramaImmersion;
+  addOrb(id: string, state: OrbState): SphereOrb;
+  readonly immersion: SphereImmersion;
   setAppearance(appearance: OrbAppearance): void;
   /** The camera frame the next draw uses: the presentation view when one is set, or `view`. */
-  cameraFrame(view?: NavigationPresentation | null): PanoramaCameraFrame | null;
+  cameraFrame(view?: NavigationPresentation | null): SphereCameraFrame | null;
   /** Orbs under a canvas point (CSS px), nearest first, then by id; occluded ones left out by the caller's test. */
   pick(clientX: number, clientY: number, isOccluded: (eye: Vec3, direction: Vec3, distance: number) => boolean): OrbHit[];
   /** Where a world direction from the eye lands on the canvas, CSS px, or null behind the view. */
-  project(direction: Vec3, frame?: PanoramaCameraFrame): { x: number; y: number } | null;
+  project(direction: Vec3, frame?: SphereCameraFrame): { x: number; y: number } | null;
   /**
    * Test only: renders what `target` shows as float vectors and reads them
    * back, each output in its own render target within one rendered frame:
    * the view ray each pixel drew with, and the image direction it sampled.
    */
-  probe(target: { orb: string } | { immersion: true }, outputs: readonly PanoramaProbeOutput[]): Promise<PanoramaProbeResult>;
+  probe(target: { orb: string } | { immersion: true }, outputs: readonly SphereProbeOutput[]): Promise<SphereProbeResult>;
   /** Turns the work-saving experiments on or off; what is left out keeps its value. */
-  setExperiments(experiments: Partial<PanoramaRendererExperiments>): void;
+  setExperiments(experiments: Partial<SphereRendererExperiments>): void;
   /** Test only: draw with uniforms this many frames old (the negative control). */
   setUniformDelayFrames(frames: number): void;
   /**
@@ -210,7 +210,7 @@ export interface PanoramaRenderer {
   /** Test only: the last frames' camera and uniform revisions, to show no draw used a stale camera. */
   drawRecords(): readonly { frameId: number; target: string; cameraRevision: string; uniformRevision: string }[];
   /** Test only: what an orb draws from, and its radius in `frame`, for a CPU reference to use the same inputs. */
-  inspectOrb(id: string, frame?: PanoramaCameraFrame): { marker: Vec3 | null; radiusMeters: number; effectiveRadius: number | null; content: Mat3; visible: boolean; textured: boolean } | null;
+  inspectOrb(id: string, frame?: SphereCameraFrame): { marker: Vec3 | null; radiusMeters: number; effectiveRadius: number | null; content: Mat3; visible: boolean; textured: boolean } | null;
   dispose(): void;
 }
 
@@ -218,10 +218,10 @@ export interface PanoramaRenderer {
 
 /**
  * The quad an orb draws: perpendicular to the axis, or across the view when
- * the sphere is near or around the eye. `marginCssPx` more beyond the
+ * the orb is near or around the eye. `marginCssPx` more beyond the
  * silhouette leaves room for an outline.
  */
-export function orbQuad(rel: Vec3, radius: number, frame: Pick<PanoramaCameraFrame, "view" | "viewportHeightCssPx">, nearPlane: number, marginCssPx = 0): { center: Vec3; u: Vec3; v: Vec3; fullscreen: boolean } {
+export function orbQuad(rel: Vec3, radius: number, frame: Pick<SphereCameraFrame, "view" | "viewportHeightCssPx">, nearPlane: number, marginCssPx = 0): { center: Vec3; u: Vec3; v: Vec3; fullscreen: boolean } {
   const d = length(rel);
   const { view } = frame;
   const tanHalf = Math.tan(view.verticalFovRad / 2);
@@ -248,7 +248,7 @@ export function orbQuad(rel: Vec3, radius: number, frame: Pick<PanoramaCameraFra
 }
 
 /** The radius that keeps an orb's projected diameter within the marker bounds, metres. */
-export function effectiveOrbRadius(radiusMeters: number, distance: number, frame: Pick<PanoramaCameraFrame, "view" | "viewportHeightCssPx">, bounds: { min: number; max: number }): number {
+export function effectiveOrbRadius(radiusMeters: number, distance: number, frame: Pick<SphereCameraFrame, "view" | "viewportHeightCssPx">, bounds: { min: number; max: number }): number {
   const tanHalf = Math.tan(frame.view.verticalFovRad / 2);
   const metresPerPixel = (distance * 2 * tanHalf) / Math.max(1, frame.viewportHeightCssPx);
   const low = (bounds.min / 2) * metresPerPixel;
@@ -290,7 +290,7 @@ const NEAR_PLANE_WITHOUT_CAMERA = 0.1;
 
 // ─── Renderer ──────────────────────────────────────────────────────────
 
-export interface PanoramaRendererOptions {
+export interface SphereRendererOptions {
   getCamera(): Camera | null;
   viewportHeightCssPx(): number;
   presentationLayerMask: number;
@@ -303,11 +303,11 @@ export interface PanoramaRendererOptions {
   /** Where preparing each draw's direction and parameters is timed, inside the draw phase. */
   profiler?: ViewerProfiler;
   /** The experiments to start with; all off when omitted. */
-  experiments?: Partial<PanoramaRendererExperiments>;
+  experiments?: Partial<SphereRendererExperiments>;
 }
 
 /** The lean shaders' marker: the variant is chosen per material by this define. */
-const LEAN_DEFINE = "#define PANORAMA_LEAN";
+const LEAN_DEFINE = "#define SPHERE_LEAN";
 
 /** A digest of a camera frame's inputs, to correlate a draw with its camera. */
 function frameRevision(eye: Vec3, basis: { forward: Vec3; up: Vec3 }, verticalFovRad: number, aspect: number): string {
@@ -357,7 +357,7 @@ export function imageFromClipMatrix(inverseViewRotProj: Matrix, content: Mat3, r
 /** Nested under profileBabylonScene's draw phase, which these draws run in. */
 const UNIFORMS_SECTION = "render/draw/panorama uniforms";
 
-export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOptions): PanoramaRenderer {
+export function createSphereRenderer(scene: Scene, options: SphereRendererOptions): SphereRenderer {
   const engine = scene.getEngine();
   const webGpu = isBorrowedWebGpuEngine(engine);
   const caps = engine.getCaps();
@@ -369,12 +369,12 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   const available = unavailableReason === null;
   const webGl2 = !webGpu && "webGLVersion" in engine && Number(engine.webGLVersion) >= 2;
   const backendDefines = webGpu ? [] : [
-    ...(webGl2 ? ["#define PANORAMA_WEBGL2"] : []),
-    ...(webGl2 || caps.textureLOD ? ["#define PANORAMA_TEXTURE_GRADIENTS"] : []),
+    ...(webGl2 ? ["#define SPHERE_WEBGL2"] : []),
+    ...(webGl2 || caps.textureLOD ? ["#define SPHERE_TEXTURE_GRADIENTS"] : []),
   ];
   const shaderLanguage = webGpu ? ShaderLanguage.WGSL : ShaderLanguage.GLSL;
   let appearance: OrbAppearance = options.appearance;
-  const experiments: PanoramaRendererExperiments = { ...NO_PANORAMA_EXPERIMENTS, ...options.experiments };
+  const experiments: SphereRendererExperiments = { ...NO_SPHERE_EXPERIMENTS, ...options.experiments };
   /** The lean shaders exist in GLSL only. */
   const leanShaders = (): boolean => experiments.shaders && !webGpu;
   let captureDraws = false;
@@ -404,7 +404,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   const canvasCssHeight = (): number => options.viewportHeightCssPx();
 
   /** The camera the globe is drawn with this frame, or the presentation that replaces its view. */
-  function currentFrame(presentation = options.getPresentationView()): PanoramaCameraFrame | null {
+  function currentFrame(presentation = options.getPresentationView()): SphereCameraFrame | null {
     const camera: Camera | null = options.getCamera();
     if (!camera) return null;
     // The eye is updated with the view matrix: bring both up to date before reading either.
@@ -443,7 +443,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     return Object.defineProperty(frame, "revision", {
       get: () => (revision ??= frameRevision(eye, basis, verticalFovRad, aspect)),
       enumerable: true,
-    }) as PanoramaCameraFrame;
+    }) as SphereCameraFrame;
   }
 
   /** What the camera frame depends on, cheaply: the camera, its matrices' versions, the aspect and the canvas height. */
@@ -475,10 +475,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   // rendered frame. It is computed again whenever the camera or the presented
   // view changed since, even within one rendered frame, so a draw never uses a
   // camera from before a move.
-  let frameCache: { id: number; key: string; presentation: NavigationPresentation | null; frame: PanoramaCameraFrame | null } | null = null;
-  const history: PanoramaCameraFrame[] = [];
+  let frameCache: { id: number; key: string; presentation: NavigationPresentation | null; frame: SphereCameraFrame | null } | null = null;
+  const history: SphereCameraFrame[] = [];
   let historyFrameId = -1;
-  function drawFrame(): { current: PanoramaCameraFrame; uniforms: PanoramaCameraFrame } | null {
+  function drawFrame(): { current: SphereCameraFrame; uniforms: SphereCameraFrame } | null {
     const id = engine.frameId;
     const presentation = options.getPresentationView();
     const lean = experiments.bookkeeping;
@@ -510,7 +510,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     return { current, uniforms };
   }
 
-  function record(target: string, current: PanoramaCameraFrame, uniforms: PanoramaCameraFrame): void {
+  function record(target: string, current: SphereCameraFrame, uniforms: SphereCameraFrame): void {
     if (!keepingRecords()) return;
     records.push({ frameId: engine.frameId, target, cameraRevision: current.revision, uniformRevision: uniforms.revision });
     if (records.length > 600) records.splice(0, records.length - 600);
@@ -537,7 +537,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const material = new ShaderMaterial(name, scene, { vertexSource: webGpu ? ORB_VERTEX : ORB_VERTEX_GLSL, fragmentSource: webGpu ? ORB_FRAGMENT : ORB_FRAGMENT_GLSL }, {
       attributes: ["position"],
       uniforms: webGpu ? [...ORB_UNIFORMS] : [...ORB_UNIFORMS, ...ORB_LEAN_UNIFORMS],
-      samplers: ["panoramaCube", "panoramaEquirect", ...TILE_SAMPLERS],
+      samplers: ["sphereCube", "sphereEquirect", ...TILE_SAMPLERS],
       defines: withLeanDefine([...backendDefines, ...defines], leanShaders()),
       shaderLanguage,
       needAlphaBlending: !defines.some(define => define.includes("OUTPUT_")),
@@ -554,7 +554,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     return material;
   }
 
-  interface OrbInternal extends PanoramaOrb {
+  interface OrbInternal extends SphereOrb {
     state: OrbState;
     expansion: OrbExpansion | null;
     mesh: Mesh;
@@ -566,9 +566,9 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     /** The overlay's material for a tiled source. */
     revealTilesMaterial: ShaderMaterial | null;
     /** Draws the orb's preview, or `source` in its place. */
-    applyUniforms(material: ShaderMaterial, uniforms: PanoramaCameraFrame, radius: number, opacity: number, source?: ImmersionSource | null): boolean;
+    applyUniforms(material: ShaderMaterial, uniforms: SphereCameraFrame, radius: number, opacity: number, source?: ImmersionSource | null): boolean;
     /** The radius drawn at `distance` in `frame`: the screen-size bounds, then the display scale. */
-    drawnRadius(distance: number, frame: PanoramaCameraFrame): number;
+    drawnRadius(distance: number, frame: SphereCameraFrame): number;
   }
 
   function applyContent(material: ShaderMaterial, content: Mat3, prefix = "content"): void {
@@ -584,14 +584,14 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     material.setVector4(`${prefix}AtlasInfo`, new Vector4(tiles.atlasSize[0], tiles.atlasSize[1], tiles.warp === "equi-angular" ? 1 : 0, tiles.outlines ? 1 : 0));
   }
 
-  function addOrb(id: string, initial: OrbState): PanoramaOrb {
+  function addOrb(id: string, initial: OrbState): SphereOrb {
     if (!available) {
-      // No GPU drawing; the scene list still shows the panorama.
+      // No GPU drawing; the scene list still shows the sphere.
       return { id, update() {}, setExpansion() {}, effectiveRadius: () => null, dispose() {} };
     }
-    const mesh = new Mesh(`panorama-orb-${id}`, scene);
+    const mesh = new Mesh(`sphere-orb-${id}`, scene);
     quadData.applyToMesh(mesh);
-    const revealMesh = new Mesh(`panorama-orb-reveal-${id}`, scene);
+    const revealMesh = new Mesh(`sphere-orb-reveal-${id}`, scene);
     quadData.applyToMesh(revealMesh);
     for (const each of [mesh, revealMesh]) {
       each.alwaysSelectAsActiveMesh = true;
@@ -601,8 +601,8 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     // Drawn with the terrain, so it is depth tested against it; the reveal draws later, over everything.
     revealMesh.renderingGroupId = 1;
     revealMesh.setEnabled(false);
-    const material = orbMaterial(`panorama-orb-material-${id}`, [], false);
-    const revealMaterial = orbMaterial(`panorama-orb-reveal-material-${id}`, [], true);
+    const material = orbMaterial(`sphere-orb-material-${id}`, [], false);
+    const revealMaterial = orbMaterial(`sphere-orb-reveal-material-${id}`, [], true);
     mesh.material = material;
     revealMesh.material = revealMaterial;
     const outlineColor = new Color4();
@@ -640,13 +640,13 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
         }
         target.setFloat("opacity", opacity);
         // The shader measures the outline in the pixels it draws.
-        const devicePerCss = engine.getRenderHeight() / Math.max(1, uniforms.viewportHeightCssPx);
+        const devicePerCss = engine.getRenderHeight() * (options.getCamera()?.viewport.height ?? 1) / Math.max(1, uniforms.viewportHeightCssPx);
         const [r, g, b, a] = outline?.color ?? [0, 0, 0, 0];
         target.setColor4("outlineColor", outlineColor.set(r, g, b, a));
         target.setFloat("outlineWidth", (outline?.widthPx ?? 0) * devicePerCss);
         applyContent(target, source?.content ?? orb.state.content);
-        if (source?.kind === "equirectangular") target.setTexture("panoramaEquirect", source.texture);
-        else target.setTexture("panoramaCube", source?.texture ?? orb.state.texture ?? placeholder!);
+        if (source?.kind === "equirectangular") target.setTexture("sphereEquirect", source.texture);
+        else target.setTexture("sphereCube", source?.texture ?? orb.state.texture ?? placeholder!);
         if (source?.kind === "tiles" && source.tiles) applyTiles(target, source.tiles);
         return true;
       },
@@ -660,10 +660,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       setExpansion(expansion) {
         orb.expansion = expansion;
         if (expansion?.source?.kind === "equirectangular") {
-          orb.revealEquirectMaterial ??= orbMaterial(`panorama-orb-reveal-equirect-material-${id}`, ["#define SOURCE_EQUIRECT"], true);
+          orb.revealEquirectMaterial ??= orbMaterial(`sphere-orb-reveal-equirect-material-${id}`, ["#define SOURCE_EQUIRECT"], true);
           revealMesh.material = orb.revealEquirectMaterial;
         } else if (expansion?.source?.kind === "tiles") {
-          orb.revealTilesMaterial ??= orbMaterial(`panorama-orb-reveal-tiles-material-${id}`, ["#define SOURCE_TILES"], true);
+          orb.revealTilesMaterial ??= orbMaterial(`sphere-orb-reveal-tiles-material-${id}`, ["#define SOURCE_TILES"], true);
           revealMesh.material = orb.revealTilesMaterial;
         } else revealMesh.material = revealMaterial;
         revealMesh.setEnabled(orb.state.visible && expansion !== null && orb.state.marker !== null && (expansion.source?.texture ?? orb.state.texture) !== null);
@@ -693,7 +693,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const observer: Observer<Mesh> | null = mesh.onBeforeRenderObservable.add(timed(() => {
       const frames = drawFrame();
       if (!frames) return;
-      // Expanding, the orb is the sphere itself, clipped by terrain where its overlay has not yet revealed it.
+      // Expanding, the orb is the whole ball, clipped by terrain where its overlay has not yet revealed it.
       const radius = orb.expansion?.radiusMeters ?? orb.drawnRadius(length(sub(orb.state.marker ?? frames.uniforms.eye, frames.uniforms.eye)), frames.uniforms);
       const opacity = orb.state.opacity ?? 1;
       material.disableDepthWrite = opacity < 0.999;
@@ -712,7 +712,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   }
 
   // ─── Immersion ──────────────────────────────────────────────────────
-  const immersionMesh = available ? new Mesh("panorama-immersion", scene) : null;
+  const immersionMesh = available ? new Mesh("sphere-immersion", scene) : null;
   const immersionMaterials = new Map<string, ShaderMaterial>();
   let immersionState: { source: ImmersionSource; next: ImmersionSource | null; mix: number; opacity: number; view: NavigationPresentation | null } | null = null;
   /** A host multiplier over the fade opacity, so a placement tool can ghost the photograph. */
@@ -723,10 +723,10 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const key = all.join(" ") + (opaque ? " opaque" : "");
     let material = immersionMaterials.get(key);
     if (!material) {
-      material = new ShaderMaterial(`panorama-immersion-${key || "cube"}`, scene, { vertexSource: webGpu ? IMMERSION_VERTEX : IMMERSION_VERTEX_GLSL, fragmentSource: webGpu ? IMMERSION_FRAGMENT : IMMERSION_FRAGMENT_GLSL }, {
+      material = new ShaderMaterial(`sphere-immersion-${key || "cube"}`, scene, { vertexSource: webGpu ? IMMERSION_VERTEX : IMMERSION_VERTEX_GLSL, fragmentSource: webGpu ? IMMERSION_FRAGMENT : IMMERSION_FRAGMENT_GLSL }, {
         attributes: ["position"],
         uniforms: webGpu ? [...IMMERSION_UNIFORMS] : [...IMMERSION_UNIFORMS, ...IMMERSION_LEAN_UNIFORMS],
-        samplers: ["panoramaCube", "panoramaEquirect", "nextCube", "nextEquirect", ...TILE_SAMPLERS, ...NEXT_TILE_SAMPLERS],
+        samplers: ["sphereCube", "sphereEquirect", "nextCube", "nextEquirect", ...TILE_SAMPLERS, ...NEXT_TILE_SAMPLERS],
         defines: [...backendDefines, ...all],
         shaderLanguage,
         needAlphaBlending: !opaque && !defines.some(define => define.includes("OUTPUT_")),
@@ -750,7 +750,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     if (output) defines.push(output === "direction" ? "#define OUTPUT_DIRECTION" : "#define OUTPUT_RAY");
     return defines;
   }
-  function applyImmersionUniforms(material: ShaderMaterial, uniforms: PanoramaCameraFrame): void {
+  function applyImmersionUniforms(material: ShaderMaterial, uniforms: SphereCameraFrame): void {
     const state = immersionState;
     if (!state) return;
     material.setMatrix("inverseViewRotProj", uniforms.inverseViewRotProj);
@@ -762,7 +762,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       material.setMatrix("imageFromClip", imageFromClipMatrix(uniforms.inverseViewRotProj, state.source.content, new Matrix()));
       material.setMatrix("nextImageFromClip", imageFromClipMatrix(uniforms.inverseViewRotProj, (state.next ?? state.source).content, new Matrix()));
     }
-    material.setTexture(state.source.kind === "equirectangular" ? "panoramaEquirect" : "panoramaCube", state.source.texture);
+    material.setTexture(state.source.kind === "equirectangular" ? "sphereEquirect" : "sphereCube", state.source.texture);
     if (state.source.kind === "tiles" && state.source.tiles) applyTiles(material, state.source.tiles);
     if (state.next) material.setTexture(state.next.kind === "equirectangular" ? "nextEquirect" : "nextCube", state.next.texture);
     if (state.next?.kind === "tiles" && state.next.tiles) applyTiles(material, state.next.tiles, true);
@@ -794,7 +794,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const opaque = experiments.opaqueImmersion && immersionState.opacity * displayOpacity >= 0.999;
     immersionMesh.material = immersionMaterial(immersionDefines(immersionState), opaque);
   }
-  const immersion: PanoramaImmersion = {
+  const immersion: SphereImmersion = {
     show(state) {
       if (!immersionMesh) return;
       immersionState = state ? { source: state.source, next: state.next ?? null, mix: state.mix ?? 0, opacity: state.opacity ?? 1, view: state.view ?? null } : null;
@@ -816,10 +816,25 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
   };
 
   // ─── Picking and projection ─────────────────────────────────────────
-  function rayThrough(frame: PanoramaCameraFrame, clientX: number, clientY: number): Vec3 | null {
+  /** The camera's viewport on the page: the world's part of a canvas that other surfaces can share. */
+  function viewportRect(): { left: number; top: number; width: number; height: number } | null {
     const canvas = engine.getRenderingCanvas();
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
+    const viewport = options.getCamera()?.viewport;
+    if (!viewport) return { left: rect.left, top: rect.top, width: rect.width, height: rect.height };
+    // Babylon measures the viewport from the bottom.
+    return {
+      left: rect.left + viewport.x * rect.width,
+      top: rect.top + (1 - viewport.y - viewport.height) * rect.height,
+      width: viewport.width * rect.width,
+      height: viewport.height * rect.height,
+    };
+  }
+
+  function rayThrough(frame: SphereCameraFrame, clientX: number, clientY: number): Vec3 | null {
+    const rect = viewportRect();
+    if (!rect) return null;
     const x = (clientX - rect.left) / Math.max(1, rect.width);
     const y = (clientY - rect.top) / Math.max(1, rect.height);
     const tanHalf = Math.tan(frame.view.verticalFovRad / 2);
@@ -856,20 +871,19 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
 
   function project(direction: Vec3, frame = currentFrame() ?? undefined): { x: number; y: number } | null {
     if (!frame) return null;
-    const canvas = engine.getRenderingCanvas();
-    if (!canvas) return null;
     const z = dot(direction, frame.view.forward);
     if (z <= 1e-6) return null;
     const tanHalf = Math.tan(frame.view.verticalFovRad / 2);
     const x = dot(direction, frame.view.right) / (z * tanHalf * frame.view.aspect);
     const y = dot(direction, frame.view.up) / (z * tanHalf);
     if (Math.abs(x) > 1.2 || Math.abs(y) > 1.2) return null;
-    const rect = canvas.getBoundingClientRect();
+    const rect = viewportRect();
+    if (!rect) return null;
     return { x: rect.left + ((x + 1) / 2) * rect.width, y: rect.top + ((1 - y) / 2) * rect.height };
   }
 
   // ─── Probe (tests) ──────────────────────────────────────────────────
-  async function probe(target: { orb: string } | { immersion: true }, outputs: readonly PanoramaProbeOutput[]): Promise<PanoramaProbeResult> {
+  async function probe(target: { orb: string } | { immersion: true }, outputs: readonly SphereProbeOutput[]): Promise<SphereProbeResult> {
     if (!available) throw new Error(unavailableReason ?? "unavailable");
     if (outputs.length === 0) throw new Error("Ask for at least one output.");
     const width = engine.getRenderWidth();
@@ -877,12 +891,12 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     const orb = "orb" in target ? orbs.get(target.orb) : null;
     if ("orb" in target && !orb) throw new Error(`No orb ${target.orb}`);
     if (!("orb" in target) && !immersionState) throw new Error("Immersion is not shown.");
-    let captured: PanoramaCameraFrame | null = null;
+    let captured: SphereCameraFrame | null = null;
     const passes = outputs.map(output => {
-      const rtt = new RenderTargetTexture(`panorama-probe-${output}`, { width, height }, scene, false, true, Constants.TEXTURETYPE_FLOAT);
+      const rtt = new RenderTargetTexture(`sphere-probe-${output}`, { width, height }, scene, false, true, Constants.TEXTURETYPE_FLOAT);
       // Unset, a render target clears to the scene's colour; the probe needs coverage 0 where nothing drew.
       rtt.clearColor = new Color4(0, 0, 0, 0);
-      const mesh = new Mesh(`panorama-probe-mesh-${output}`, scene);
+      const mesh = new Mesh(`sphere-probe-mesh-${output}`, scene);
       mesh.alwaysSelectAsActiveMesh = true;
       mesh.isPickable = false;
       mesh.doNotSyncBoundingInfo = true;
@@ -892,7 +906,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       let observer: Observer<Mesh> | null;
       if (orb) {
         quadData.applyToMesh(mesh);
-        material = orbMaterial(`panorama-probe-orb-${output}`, [define], false);
+        material = orbMaterial(`sphere-probe-orb-${output}`, [define], false);
         observer = mesh.onBeforeRenderObservable.add(() => {
           const frames = drawFrame();
           if (!frames) return;
@@ -926,7 +940,7 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
       const rendered = Promise.all(passes.map(pass => new Promise<void>(resolve => { pass.rtt.onAfterRenderObservable.addOnce(() => resolve()); })));
       options.requestRender();
       await rendered;
-      const results: Partial<Record<PanoramaProbeOutput, Float32Array>> = {};
+      const results: Partial<Record<SphereProbeOutput, Float32Array>> = {};
       for (const pass of passes) {
         const pixels = await pass.rtt.readPixels(0, 0, null, true, false);
         if (!pixels) throw new Error("The probe read nothing back.");
@@ -994,3 +1008,5 @@ export function createPanoramaRenderer(scene: Scene, options: PanoramaRendererOp
     },
   };
 }
+export * from "./rectangleRenderer.js";
+export * from "./sphereRenderer.js";

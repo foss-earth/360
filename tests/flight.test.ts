@@ -29,7 +29,7 @@ describe("the flight into an orb", () => {
     close(first.up, start.up);
   });
 
-  it("ends inside the sphere facing the marker, level about its vertical, where the image can take over", () => {
+  it("ends inside the orb facing the marker, level about its vertical, where the image can take over", () => {
     const last = flight.pose(1);
     const rel = sub(marker, last.position);
     expect(length(rel)).toBeCloseTo(radius * INSIDE_SHARE, 6);
@@ -45,19 +45,19 @@ describe("the flight into an orb", () => {
     expect(ratios[0]).toBeLessThan(1);
   });
 
-  it("does not fly from inside the sphere", () => {
+  it("does not fly from inside the orb", () => {
     expect(flightIn(world, pose(add(marker, toEcef([2, 0, 0])), 0, 0), marker, radius)).toBeNull();
   });
 });
 
 describe("the flight out of an orb", () => {
-  // The overview the panorama was entered from: 600 m out, 40° down from the horizon, a 45° view.
+  // The overview the sphere was entered from: 600 m out, 40° down from the horizon, a 45° view.
   const overview = { center: { x: 0, y: 0, z: 0 }, yaw: 0.3, pitch: Math.PI / 2 - (40 * Math.PI) / 180, radius: 600, fov: Math.PI / 4 };
   const start = pose(marker, 250, 12, 3, 75);
   const radius = 4;
   const flight = flightOut(world, start, marker, radius, overview)!;
 
-  it("starts inside the sphere with the image's own view, so the orb can take over from it", () => {
+  it("starts inside the orb with the image's own view, so the orb can take over from it", () => {
     const first = flight.pose(0);
     const rel = sub(marker, first.position);
     expect(length(rel)).toBeCloseTo(radius * INSIDE_SHARE, 9);
@@ -89,7 +89,7 @@ describe("the flight out of an orb", () => {
     expect(flight.end.view).toMatchObject({ pitchDeg: expect.closeTo(40, 9), zoomMeters: 600 });
   });
 
-  it("does not fly to a view inside the sphere", () => {
+  it("does not fly to a view inside the orb", () => {
     expect(flightOut(world, start, marker, 700, overview)).toBeNull();
   });
 });

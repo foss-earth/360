@@ -11,13 +11,13 @@ export interface FlightPose {
 }
 
 export interface Flight {
-  /** The sphere the flight passes through, drawn at this radius throughout, metres. */
+  /** The orb the flight passes through, drawn at this radius throughout, metres. */
   radiusMeters: number;
   /** The pose at eased progress `s`, from 0 to 1. */
   pose(s: number): FlightPose;
 }
 
-/** How far inside the sphere a flight ends or starts, as a share of its radius: well inside, where every ray is covered. */
+/** How far inside the orb a flight ends or starts, as a share of its radius: well inside, where every ray is covered. */
 export const INSIDE_SHARE = 0.5;
 
 /** The signed angle about the unit `axis` that turns `from` to `to`, both across it, radians. */
@@ -49,9 +49,9 @@ export function poseView(pose: FlightPose, aspect: number): ViewBasis {
 
 /**
  * Into an orb from where the camera is: straight at its marker while turning
- * to face it, to `INSIDE_SHARE` of the radius inside a sphere of
+ * to face it, to `INSIDE_SHARE` of the radius inside an orb of
  * `radiusMeters`. The roll the view starts with, relative to level, unwinds
- * on the way. Null when the eye is already inside the sphere.
+ * on the way. Null when the eye is already inside the orb.
  */
 export function flightIn(world: ViewerWorldMath, start: FlightPose, marker: Vec3, radiusMeters: number): Flight | null {
   const rel = sub(marker, start.position);
@@ -77,11 +77,11 @@ export function flightIn(world: ViewerWorldMath, start: FlightPose, marker: Vec3
 
 /**
  * Out of an orb, backing away from the way the view faces: from
- * `INSIDE_SHARE` of the radius inside a sphere of `radiusMeters` to the view
+ * `INSIDE_SHARE` of the radius inside an orb of `radiusMeters` to the view
  * that keeps the heading and looks at the marker with the saved overview's
  * pitch, distance and field of view. `end` is that view as the globe
  * camera's snapshot, centred on the marker. The view's roll unwinds on the
- * way. Null when that view would be inside the sphere.
+ * way. Null when that view would be inside the orb.
  */
 export function flightOut(world: ViewerWorldMath, start: Omit<FlightPose, "position">, marker: Vec3, radiusMeters: number, overview: ViewerNavigationSnapshot["camera"]): (Flight & { end: ViewerNavigationSnapshot }) | null {
   const far = overview.radius;

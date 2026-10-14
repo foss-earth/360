@@ -1,6 +1,11 @@
-/** Browser input binds only while the host viewer has navigation. */
+/**
+ * One input path for an image camera (docs/proposals/shared-image-viewer-implementation.md
+ * §8): a live sphere's look or a rectangle surface's camera, bound to the
+ * element that shows it. The engine's wheel classification and the shared
+ * control-key policy come in as ports.
+ */
 import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
-import type { LookModel } from "./look.js";
+import type { ImageCameraTarget, SurfacePoint, TouchPair } from "./cameraTarget.js";
 const WHEEL_LINE_PX = 16;
 const WHEEL_NOTCH_PX = 100;
 const PINCH_WHEEL_PX_PER_LOG_SCALE = 100;
@@ -8,8 +13,18 @@ export interface LookInputOptions {
   window: Window;
   controlTakesKey(target: EventTarget | null, key: string): boolean;
   createWheelGestureClassifier(options: { isSafariWithGestures: boolean; mode(): "auto" | "mouse" | "trackpad"; precedingWheelMs?: number }): (event: WheelEvent) => "ignore" | "pan" | "orbit" | "pinchZoom" | "wheelZoom";
+  /** The element that shows the image and takes its pointer input. */
   canvas: HTMLElement;
-  model: LookModel;
+  model: ImageCameraTarget;
+  /** A client point in the target's surface-local CSS pixels, or null; without it zoom is anchored at the centre. */
+  localPoint?: (clientX: number, clientY: number) => SurfacePoint | null;
+  /**
+   * Wheel and Safari gesture events through a router that keeps each gesture
+   * with the element it began over; without one, this element listens itself.
+   */
+  router?: WheelGestureRouter;
+  /** Whether this binding owns the keyboard now: one binding does at a time. Always, without it. */
+  ownsKeys?: () => boolean;
   /** Escape and the controller's exit. */
   onExit(): void;
   /** Any look input: cancels an entry's expansion or an arrival's levelling. */
@@ -26,11 +41,102 @@ export interface LookInputOptions {
   precedingWheelMs?: number;
 }
 
-/** Binds look input; returns the controller-intent handler and a detach function. */
-export function attachLookInput(options: LookInputOptions): { applyIntents(frame: ActionIntentFrame): void; detach(): void } {
+/** Delivers one kind of routed event to the element that owns its gesture. */
+export interface RoutedGestureHandlers {
+  wheel(event: WheelEvent): void;
+  gesture(event: Event): void;
+}
+
+/**
+ * Chooses one owner for each wheel or Safari gesture at its start and keeps
+ * it through the gesture, momentum included, wherever the pointer then goes:
+ * a registered element's gesture reaches only that element, never the page or
+ * the globe, and another owner's gesture never reaches a registered element.
+ */
+export interface WheelGestureRouter {
+  register(element: HTMLElement, handlers: RoutedGestureHandlers): () => void;
+  /** Drops the rest of the gesture under way, as a cancelled target must not receive its momentum. */
+  suppressCurrent(): void;
+  dispose(): void;
+}
+
+/** Below this gap between wheel events, ms, they are one gesture: the engine's WHEEL_GESTURE_IDLE_MS. */
+const WHEEL_IDLE_MS = 180;
+
+export function createWheelGestureRouter(options: { window: Window; nowMs(): number; idleMs?: number }): WheelGestureRouter {
+  const { window } = options;
+  const idleMs = options.idleMs ?? WHEEL_IDLE_MS;
+  const owners = new Map<HTMLElement, RoutedGestureHandlers>();
+  let wheelOwner: HTMLElement | "other" | "suppressed" | null = null;
+  let lastWheelMs = -Infinity;
+  let gestureOwner: HTMLElement | "other" | "suppressed" | null = null;
+  const ownerOf = (target: EventTarget | null): HTMLElement | "other" => {
+    const View = window as unknown as { Node?: typeof Node };
+    if (View.Node && target instanceof View.Node) for (const element of owners.keys()) if (element.contains(target)) return element;
+    return "other";
+  };
+  const take = (event: Event): void => {
+    event.stopImmediatePropagation();
+    if (event.cancelable) event.preventDefault();
+  };
+  const onWheel = (event: Event): void => {
+    const now = options.nowMs();
+    if (now - lastWheelMs > idleMs || wheelOwner === null) wheelOwner = ownerOf(event.target);
+    lastWheelMs = now;
+    if (wheelOwner === "other") return;
+    take(event);
+    if (wheelOwner !== "suppressed") owners.get(wheelOwner)?.wheel(event as WheelEvent);
+  };
+  const onGesture = (event: Event): void => {
+    if (event.type === "gesturestart" || gestureOwner === null) gestureOwner = ownerOf(event.target);
+    const owner = gestureOwner;
+    if (event.type === "gestureend") gestureOwner = null;
+    if (owner === "other") return;
+    take(event);
+    if (owner !== "suppressed") owners.get(owner)?.gesture(event);
+  };
+  window.addEventListener("wheel", onWheel, { capture: true, passive: false });
+  for (const type of ["gesturestart", "gesturechange", "gestureend"]) window.addEventListener(type, onGesture, { capture: true, passive: false } as AddEventListenerOptions);
+  return {
+    register(element, handlers) {
+      owners.set(element, handlers);
+      return () => {
+        if (owners.get(element) !== handlers) return;
+        owners.delete(element);
+        if (wheelOwner === element) wheelOwner = "suppressed";
+        if (gestureOwner === element) gestureOwner = "suppressed";
+      };
+    },
+    suppressCurrent() {
+      if (wheelOwner !== null && wheelOwner !== "other") wheelOwner = "suppressed";
+      if (gestureOwner !== null && gestureOwner !== "other") gestureOwner = "suppressed";
+    },
+    dispose() {
+      owners.clear();
+      window.removeEventListener("wheel", onWheel, { capture: true });
+      for (const type of ["gesturestart", "gesturechange", "gestureend"]) window.removeEventListener(type, onGesture, { capture: true });
+    },
+  };
+}
+
+export interface LookInputBinding {
+  applyIntents(frame: ActionIntentFrame): void;
+  /**
+   * Ends what is under way, as on a document change: captures, held rates,
+   * anchors and glide, and the rest of a routed wheel gesture.
+   */
+  cancel(): void;
+  detach(): void;
+}
+
+/** Binds image camera input; returns the controller-intent handler, cancellation and a detach function. */
+export function attachLookInput(options: LookInputOptions): LookInputBinding {
   const { canvas, model, window } = options;
   const pointers = new Map<number, { x: number; y: number; at: number }>();
-  let pinchFrom: number | null = null;
+  let pinchFrom: TouchPair | null = null;
+  /** The last place a pointer was seen over the element, for a Safari pinch without coordinates. */
+  let hover: { x: number; y: number } | null = null;
+  const local = (x: number, y: number): SurfacePoint | null => options.localPoint?.(x, y) ?? null;
   const keys = new Set<string>();
   const padRates = { lookX: 0, lookY: 0, zoom: 0 };
   const classifyWheel = options.createWheelGestureClassifier({
@@ -52,9 +158,11 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     if (model.moving()) options.requestFrame();
   };
 
-  const separation = (): number => {
+  /** The first two touches, in surface-local CSS px when the host converts them. */
+  const touchPair = (): TouchPair => {
     const [a, b] = [...pointers.values()];
-    return Math.hypot(a.x - b.x, a.y - b.y);
+    const pa = local(a.x, a.y) ?? a, pb = local(b.x, b.y) ?? b;
+    return { mid: { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 }, separation: Math.hypot(pa.x - pb.x, pa.y - pb.y) };
   };
 
   const onPointerDown = (event: PointerEvent): void => {
@@ -63,17 +171,19 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     options.onUserInput();
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
     try { canvas.setPointerCapture(event.pointerId); } catch { /* the pointer may already be gone */ }
-    pinchFrom = pointers.size === 2 ? separation() : null;
+    hover = { x: event.clientX, y: event.clientY };
+    pinchFrom = pointers.size === 2 ? touchPair() : null;
     event.preventDefault();
   };
   const onPointerMove = (event: PointerEvent): void => {
+    hover = { x: event.clientX, y: event.clientY };
     const last = pointers.get(event.pointerId);
     if (!last) return;
     const current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
     pointers.set(event.pointerId, current);
     if (pointers.size >= 2) {
-      const now = separation();
-      if (pinchFrom !== null) model.pinch(pinchFrom, now);
+      const now = touchPair();
+      if (pinchFrom !== null) model.touchPinch(pinchFrom, now);
       pinchFrom = now;
     } else {
       model.drag(current.x - last.x, current.y - last.y, current.at - last.at);
@@ -83,7 +193,7 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
   const onPointerUp = (event: PointerEvent): void => {
     const last = pointers.get(event.pointerId);
     if (!last || !pointers.delete(event.pointerId)) return;
-    pinchFrom = pointers.size === 2 ? separation() : null;
+    pinchFrom = pointers.size === 2 ? touchPair() : null;
     if (pointers.size === 0) {
       model.release(event.timeStamp - last.at);
       if (model.moving()) options.requestFrame();
@@ -95,11 +205,18 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     if (gesture === "ignore") return;
     options.onUserInput();
     const scale = event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? WHEEL_NOTCH_PX * 3 : 1;
+    const at = local(event.clientX, event.clientY);
     // A swipe, or shift+wheel, looks around: what pans or orbits the globe.
     if (gesture === "pan" || gesture === "orbit") model.swipe(event.deltaX * scale, event.deltaY * scale);
-    else if (gesture === "pinchZoom") model.pinchBy((-event.deltaY * scale) / PINCH_WHEEL_PX_PER_LOG_SCALE);
-    else model.wheel(event.deltaY * scale);
+    else if (gesture === "pinchZoom") model.pinchBy((-event.deltaY * scale) / PINCH_WHEEL_PX_PER_LOG_SCALE, at);
+    else model.wheel(event.deltaY * scale, at);
     options.requestFrame();
+  };
+  /** A Safari gesture's own point when it has one, else the last pointer, else none: the centre. */
+  const gesturePoint = (event: Event): SurfacePoint | null => {
+    const { clientX, clientY } = event as Event & { clientX?: number; clientY?: number };
+    if (typeof clientX === "number" && typeof clientY === "number" && Number.isFinite(clientX) && Number.isFinite(clientY) && (clientX !== 0 || clientY !== 0)) return local(clientX, clientY);
+    return hover ? local(hover.x, hover.y) : null;
   };
   // Safari's trackpad pinch: `scale` is relative to the gesture's start.
   const onGestureStart = (event: Event): void => {
@@ -111,11 +228,22 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     const next = (event as Event & { scale?: number }).scale;
     if (typeof next !== "number" || !(next > 0)) return;
     options.onUserInput();
-    model.pinch(gestureScale, next);
+    model.pinchBy(Math.log(next / gestureScale), gesturePoint(event));
     gestureScale = next;
     options.requestFrame();
   };
+  // Kept, so the end of the pinch does not reach the globe.
+  const onGestureEnd = (event: Event): void => {
+    event.preventDefault();
+    gestureScale = 1;
+  };
+  const onRoutedGesture = (event: Event): void => {
+    if (event.type === "gesturestart") onGestureStart(event);
+    else if (event.type === "gesturechange") onGestureChange(event);
+    else onGestureEnd(event);
+  };
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (options.ownsKeys && !options.ownsKeys()) return;
     // A focused control keeps the keys it uses: a slider its arrows, a text field all of them.
     if (options.controlTakesKey(event.target, event.key) || options.capturing?.()) return;
     if (event.key === "Escape") {
@@ -138,17 +266,26 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
     for (const id of pointers.keys()) { try { canvas.releasePointerCapture(id); } catch { /* released */ } }
     pointers.clear(); pinchFrom = null;
     padRates.lookX = padRates.lookY = padRates.zoom = 0;
+    gestureScale = 1;
     model.cancelInertia(); syncRates();
+  };
+  const onPointerLeave = (event: PointerEvent): void => {
+    if (!pointers.has(event.pointerId)) hover = null;
   };
 
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
   canvas.addEventListener("pointercancel", onPointerUp);
-  canvas.addEventListener("wheel", onWheel, { passive: false });
-  if (options.safariGestures) {
-    canvas.addEventListener("gesturestart", onGestureStart, { passive: false });
-    canvas.addEventListener("gesturechange", onGestureChange, { passive: false });
+  canvas.addEventListener("pointerleave", onPointerLeave);
+  const unroute = options.router?.register(canvas, { wheel: onWheel, gesture: onRoutedGesture }) ?? null;
+  if (!unroute) {
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    if (options.safariGestures) {
+      canvas.addEventListener("gesturestart", onGestureStart, { passive: false });
+      canvas.addEventListener("gesturechange", onGestureChange, { passive: false });
+      canvas.addEventListener("gestureend", onGestureEnd, { passive: false });
+    }
   }
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
@@ -171,15 +308,24 @@ export function attachLookInput(options: LookInputOptions): { applyIntents(frame
         syncRates();
       }
     },
+    cancel() {
+      if (!attached) return;
+      onBlur();
+      hover = null;
+      options.router?.suppressCurrent();
+    },
     detach() {
       if (!attached) return; attached = false;
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointerleave", onPointerLeave);
+      unroute?.();
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("gesturestart", onGestureStart);
       canvas.removeEventListener("gesturechange", onGestureChange);
+      canvas.removeEventListener("gestureend", onGestureEnd);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);

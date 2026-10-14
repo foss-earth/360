@@ -2,22 +2,22 @@
 import type { BaseTexture } from "@babylonjs/core";
 import { imageSourceKey, mulMat3, type ImageEstimate, type ImageOperationScope, type ImageRepresentation, type ImageSessionBroker, type ImageSourceCache, type ImageSourceHold, type ImageSourceRequest, type Mat3 } from "@foss-earth/images";
 import type { ImageFileService, WholeImagePorts } from "@foss-earth/images/browser";
-import { CUBE_FACE_NAMES } from "@foss-earth/cubemap/core";
-import { acquireCubeFaces, loadCube } from "@foss-earth/cubemap/browser";
-import { createCubeUploadAdapter } from "@foss-earth/cubemap/babylon";
-import type { CubeRepresentationRecord } from "@foss-earth/cubemap";
-import { loadEquirect } from "@foss-earth/equirectangular/browser";
-import { createEquirectUploadAdapter } from "@foss-earth/equirectangular/babylon";
-import type { EquirectRepresentationRecord } from "@foss-earth/equirectangular";
-import { createTiledPanorama, type TiledPanorama } from "@foss-earth/tiled-cubemap/browser";
-import { createPanoramaTileAtlas, type PanoramaTileAtlas } from "@foss-earth/tiled-cubemap/babylon";
-import { tileAtlasLayout, type TileAtlasLayout, type TileSelectionParameters, type TileSchedulerLimits, type TiledCubeRepresentationRecord } from "@foss-earth/tiled-cubemap";
+import { CUBE_FACE_NAMES } from "@foss-earth/sphere-cubemap/core";
+import { acquireCubeFaces, loadCube } from "@foss-earth/sphere-cubemap/browser";
+import { createCubeUploadAdapter } from "@foss-earth/sphere-cubemap/babylon";
+import type { CubeRepresentationRecord } from "@foss-earth/sphere-cubemap";
+import { loadEquirect } from "@foss-earth/sphere-equirectangular/browser";
+import { createEquirectUploadAdapter } from "@foss-earth/sphere-equirectangular/babylon";
+import type { EquirectRepresentationRecord } from "@foss-earth/sphere-equirectangular";
+import { createTiledSphere, type TiledSphere } from "@foss-earth/sphere-tiled-cubemap/browser";
+import { createSphereTileAtlas, type SphereTileAtlas } from "@foss-earth/sphere-tiled-cubemap/babylon";
+import { tileAtlasLayout, type TileAtlasLayout, type TileSelectionParameters, type TileSchedulerLimits, type TiledCubeRepresentationRecord } from "@foss-earth/sphere-tiled-cubemap";
 import type { PreviewSheetSources, } from "@foss-earth/preview-sheets/browser";
 import type { ResolvedSheetPlace } from "@foss-earth/preview-sheets/core";
 import type { ImageTextureUploader, UploadedImageTexture, ImageRegionDevicePorts } from "@foss-earth/renderer/babylon";
 import type { ViewerResources, ViewerSource, ViewerSourceChoice } from "./viewer.js";
 import type { ViewerImageInput } from "./ports.js";
-import type { PanoramaCameraFrame, ImmersionSource, TiledSourceTextures } from "./renderer.js";
+import type { SphereCameraFrame, ImmersionSource, TiledSourceTextures } from "./renderer.js";
 
 export interface ComposedImageSource {
   readonly representation:ImageRepresentation;
@@ -29,9 +29,9 @@ export interface ComposedImageSource {
   isCurrent():boolean;
   dispose():void;
   settleReplacement():void;
-  onFrame?(camera:PanoramaCameraFrame,content:Mat3,now:number):boolean;
+  onFrame?(camera:SphereCameraFrame,content:Mat3,now:number):boolean;
   viewReady?():boolean;
-  detail?():ReturnType<TiledPanorama["stats"]>;
+  detail?():ReturnType<TiledSphere["stats"]>;
 }
 export interface ViewerResourceCompositionPorts {
   broker:ImageSessionBroker;
@@ -62,7 +62,7 @@ export interface ViewerResourceCompositionPorts {
   devicePixelsPerCss():number;
   requestRender():void;
   /** Optional test/device binding; production defaults to the public tiled owner adapter. */
-  createAtlas?(options:Parameters<typeof createPanoramaTileAtlas>[0]):PanoramaTileAtlas;
+  createAtlas?(options:Parameters<typeof createSphereTileAtlas>[0]):SphereTileAtlas;
 }
 export interface SettledViewerResources extends ViewerResources {
   retire(): void;
@@ -138,7 +138,7 @@ export function createViewerResources(ports:ViewerResourceCompositionPorts):Sett
         return {representation:record.id,progress:[`${state.charAt(0).toUpperCase()}${state.slice(1)}, at level ${value.levelWanted} of ${highest}; ${value.resident} of ${value.slots} tiles held, ${bytes} downloaded${value.reusedTiles?`, ${value.reusedTiles} ${value.reusedTiles===1?"tile":"tiles"} from saved images`:""}.`]};
       }}:{}),
       ...(held.resource.viewReady?{viewReady:()=>!released&&held.resource.viewReady!()}:{}),
-      ...(held.resource.onFrame?{onFrame:(camera:PanoramaCameraFrame,now:number,content:Mat3)=>!released&&held.resource.onFrame!(camera,content,now)}:{}),
+      ...(held.resource.onFrame?{onFrame:(camera:SphereCameraFrame,now:number,content:Mat3)=>!released&&held.resource.onFrame!(camera,content,now)}:{}),
     };
   }
   async function load(input:ViewerImageInput,record:ImageRepresentation,scope:ImageOperationScope,request:ImageSourceRequest,layout:TileAtlasLayout|null):Promise<ComposedImageSource> {
@@ -159,16 +159,16 @@ export function createViewerResources(ports:ViewerResourceCompositionPorts):Sett
       return {representation:record,source:{texture:loaded.texture.texture,kind:"equirectangular"},gpuBytes:loaded.estimate.sourceGpu,isCurrent:()=>scope.isCurrent(),dispose:loaded.dispose,settleReplacement:loaded.settleReplacement};
     }
     if(record.projection!=="tiled-cube"||!layout)throw new Error(`No public resource adapter for ${record.projection}.`);
-    let atlas:PanoramaTileAtlas|null=null,tiled:TiledPanorama|null=null,disposed=false;
+    let atlas:SphereTileAtlas|null=null,tiled:TiledSphere|null=null,disposed=false;
     const dispose=():void=>{if(disposed)return;disposed=true;scope.signal.removeEventListener("abort",dispose);tiled?.dispose();};
     scope.signal.addEventListener("abort",dispose,{once:true});
     try {
       scope.signal.throwIfAborted();
-      tiled=createTiledPanorama({representation:record as TiledCubeRepresentationRecord,layout,broker:ports.broker,scope,overlap:request.overlap,limits:ports.tiles.limits(),wake:ports.requestRender,
+      tiled=createTiledSphere({representation:record as TiledCubeRepresentationRecord,layout,broker:ports.broker,scope,overlap:request.overlap,limits:ports.tiles.limits(),wake:ports.requestRender,
         obtain:(file,bytes,operation,onChunk)=>files.obtain(file,bytes,operation,onChunk,request.priority),decode:(body,file,operation)=>files.decode(body,file,operation,request.priority),
-        createAtlas(atlasLayout,cells){atlas=(ports.createAtlas??createPanoramaTileAtlas)({device:ports.atlasDevice,layout:atlasLayout,cells,label:`${input.asset.id}/${record.id}`,
+        createAtlas(atlasLayout,cells){atlas=(ports.createAtlas??createSphereTileAtlas)({device:ports.atlasDevice,layout:atlasLayout,cells,label:`${input.asset.id}/${record.id}`,
           reserveUpload(bytes,label){const grant=ports.broker.pools.reserve("uploadOutstanding",bytes,label);return grant.ok?grant.reservation:null;}});return atlas;},});
-      const texture=atlas! as PanoramaTileAtlas;
+      const texture=atlas! as SphereTileAtlas;
       await ports.whenReady(texture.atlas,scope.signal);await ports.whenReady(texture.table,scope.signal);scope.signal.throwIfAborted();
       const tiles:TiledSourceTextures={atlas:texture.atlas,table:texture.table,layout:[(record as TiledCubeRepresentationRecord).faceSize/(record as TiledCubeRepresentationRecord).tileSize,(record as TiledCubeRepresentationRecord).tileSize,(record as TiledCubeRepresentationRecord).gutter,layout.stored],atlasSize:[layout.width,layout.height],warp:(record as TiledCubeRepresentationRecord).warp,outlines:ports.tiles.outlines()};
       return {representation:record,source:null,tiles,gpuBytes:layout.gpuBytes,isCurrent:()=>scope.isCurrent()&&!disposed,dispose,settleReplacement:()=>tiled!.settleReplacement(),viewReady:()=>tiled!.stats().complete,detail:()=>tiled!.stats(),

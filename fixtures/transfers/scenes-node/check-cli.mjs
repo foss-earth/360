@@ -19,7 +19,7 @@ try {
     for (const problem of report.problems) console.error(`file ${problem.path}: ${problem.message}`);
     for (const warning of report.warnings) console.warn(`warning ${warning.path}: ${warning.message}`);
     console.log(`${report.ok ? "OK" : "FAILED"}: ${report.summary?.title ?? "invalid scene"}`);
-    if (report.summary) console.log(`${report.summary.panoramas} panoramas, ${report.summary.assets} images; ${report.summary.files} media files, ${report.summary.mediaBytes} bytes`);
+    if (report.summary) console.log(`${report.summary.spheres} panoramas, ${report.summary.assets} images; ${report.summary.files} media files, ${report.summary.mediaBytes} bytes`);
     process.exitCode = report.ok ? 0 : 1;
   }
 } catch (error) { console.error(`check-scene: ${error instanceof Error ? error.message : String(error)}`); process.exitCode = 1; }

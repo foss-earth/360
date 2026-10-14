@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createImageSessionBroker, createImageSourceCache, mediaGroup } from "@foss-earth/images";
 import { createImageFileService, type ImageFileService } from "@foss-earth/images/browser";
-import { tileAtlasLayout, type TiledCubeRepresentationRecord } from "@foss-earth/tiled-cubemap";
+import { tileAtlasLayout, type TiledCubeRepresentationRecord } from "@foss-earth/sphere-tiled-cubemap";
 import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "../src/resources.js";
-import type { CubeRepresentationRecord } from "@foss-earth/cubemap";
+import type { CubeRepresentationRecord } from "@foss-earth/sphere-cubemap";
 import { image } from "./fixtures/viewer.js";
 
 describe("public leaf resource composition",()=>{

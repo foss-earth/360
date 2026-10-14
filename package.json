@@ -1,5 +1,5 @@
 {
-  "name": "@foss-earth/360",
+  "name": "@foss-earth/image-viewer",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -91,10 +91,11 @@
     "AGENTS.md"
   ],
   "dependencies": {
+    "@foss-earth/rectangle-image": "0.1.0",
     "@foss-earth/images": "0.1.0",
-    "@foss-earth/cubemap": "0.1.0",
-    "@foss-earth/equirectangular": "0.1.0",
-    "@foss-earth/tiled-cubemap": "0.1.0",
+    "@foss-earth/sphere-cubemap": "0.1.0",
+    "@foss-earth/sphere-equirectangular": "0.1.0",
+    "@foss-earth/sphere-tiled-cubemap": "0.1.0",
     "@foss-earth/preview-sheets": "0.1.0"
   },
   "devDependencies": {

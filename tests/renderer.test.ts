@@ -1,12 +1,12 @@
-import { BaseTexture, FreeCamera, Matrix, NullEngine, Scene, ShaderLanguage, ShaderMaterial, Vector3, Vector4 } from "@babylonjs/core";
+import { BaseTexture, FreeCamera, Matrix, NullEngine, Scene, ShaderLanguage, ShaderMaterial, Vector3, Vector4, Viewport } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dot, length, normalize, type Mat3, type Vec3 } from "@foss-earth/images";
-import { createPanoramaRenderer, imageFromClipMatrix, orbDrawConstants, orbQuad, type PanoramaRendererExperiments } from "../src/renderer.js";
+import { createSphereRenderer, imageFromClipMatrix, orbDrawConstants, orbQuad, type SphereRendererExperiments } from "../src/renderer.js";
 
 const engines: NullEngine[] = [];
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose(); });
 
-function setup(configure: (engine: NullEngine) => void = () => {}, experiments: Partial<PanoramaRendererExperiments> = {}) {
+function setup(configure: (engine: NullEngine) => void = () => {}, experiments: Partial<SphereRendererExperiments> = {}) {
   const engine = new NullEngine();
   configure(engine);
   engines.push(engine);
@@ -17,11 +17,11 @@ function setup(configure: (engine: NullEngine) => void = () => {}, experiments: 
   scene.activeCamera = camera;
   const requestRender = vi.fn();
   const onError = vi.fn();
-  const renderer = createPanoramaRenderer(scene, { getCamera: () => camera, viewportHeightCssPx: () => engine.getRenderHeight(), presentationLayerMask: 0x10000000, appearance: { previewFovDeg: 90, markerDiameterCssPx: { min: 24, max: 96 }, hitTargetDiameterCssPx: 44 }, getPresentationView: () => null, requestRender, onError, experiments });
+  const renderer = createSphereRenderer(scene, { getCamera: () => camera, viewportHeightCssPx: () => engine.getRenderHeight(), presentationLayerMask: 0x10000000, appearance: { previewFovDeg: 90, markerDiameterCssPx: { min: 24, max: 96 }, hitTargetDiameterCssPx: 44 }, getPresentationView: () => null, requestRender, onError, experiments });
   return { camera, renderer, engine, scene, requestRender, onError };
 }
 
-describe("panorama renderer backends", () => {
+describe("sphere renderer backends", () => {
   const content: Mat3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
   for (const version of [1, 2]) it(`draws analytic orbs and immersion with GLSL on WebGL ${version}`, () => {
     const { renderer, scene } = setup(engine => {
@@ -32,13 +32,13 @@ describe("panorama renderer backends", () => {
     expect(renderer.unavailableReason).toBeNull();
     const texture = new BaseTexture(scene);
     renderer.addOrb("place", { marker: [0, 0, 0], radiusMeters: 1, content, texture, visible: true, outline: null, displayScale: 1 });
-    const orbMaterial = scene.getMaterialByName("panorama-orb-material-place") as ShaderMaterial;
+    const orbMaterial = scene.getMaterialByName("sphere-orb-material-place") as ShaderMaterial;
     expect(orbMaterial.options.shaderLanguage).toBe(ShaderLanguage.GLSL);
-    expect(orbMaterial.options.defines.includes("#define PANORAMA_WEBGL2")).toBe(version === 2);
-    expect(orbMaterial.options.defines.includes("#define PANORAMA_TEXTURE_GRADIENTS")).toBe(version === 2);
+    expect(orbMaterial.options.defines.includes("#define SPHERE_WEBGL2")).toBe(version === 2);
+    expect(orbMaterial.options.defines.includes("#define SPHERE_TEXTURE_GRADIENTS")).toBe(version === 2);
     renderer.immersion.show({ source: { texture, kind: "cube", content }, next: { texture, kind: "equirectangular", content }, mix: 0.5 });
     expect(renderer.immersion.visible).toBe(true);
-    const immersion = scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
+    const immersion = scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
     expect(immersion.options.shaderLanguage).toBe(ShaderLanguage.GLSL);
     expect(immersion.options.defines).toContain("#define NEXT_EQUIRECT");
     renderer.dispose();
@@ -50,18 +50,18 @@ describe("panorama renderer backends", () => {
       Object.defineProperty(engine, "webGLVersion", { value: 1 });
     });
     renderer.immersion.show({ source: { texture: new BaseTexture(scene), kind: "equirectangular", content } });
-    const material = scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
-    expect(material.options.defines).toContain("#define PANORAMA_TEXTURE_GRADIENTS");
-    expect(material.options.defines).not.toContain("#define PANORAMA_WEBGL2");
+    const material = scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
+    expect(material.options.defines).toContain("#define SPHERE_TEXTURE_GRADIENTS");
+    expect(material.options.defines).not.toContain("#define SPHERE_WEBGL2");
     renderer.dispose();
   });
 
-  it("wakes a sleeping globe when a panorama shader finishes compiling", () => {
+  it("wakes a sleeping globe when a sphere shader finishes compiling", () => {
     const { renderer, scene, requestRender } = setup(engine => {
       Object.assign(engine.getCaps(), { fragmentDepthSupported: true, standardDerivatives: true });
     });
     renderer.immersion.show({ source: { texture: new BaseTexture(scene), kind: "equirectangular", content } });
-    const material = scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
+    const material = scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
     requestRender.mockClear();
     material.onCompiled?.(null as never);
     expect(requestRender).toHaveBeenCalledOnce();
@@ -85,7 +85,7 @@ describe("panorama renderer backends", () => {
       Object.assign(engine.getCaps(), { fragmentDepthSupported: true, standardDerivatives: true });
     });
     renderer.immersion.show({ source: { texture: new BaseTexture(scene), kind: "equirectangular", content } });
-    const material = scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
+    const material = scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
     material.onError?.(null as never, "Driver rejected the shader");
     material.onError?.(null as never, "Driver rejected the shader");
     expect(onError).toHaveBeenCalledExactlyOnceWith("Driver rejected the shader");
@@ -100,14 +100,14 @@ describe("panorama renderer backends", () => {
     });
     expect(renderer.available).toBe(true);
     renderer.immersion.show({ source: { texture: new BaseTexture(scene), kind: "cube", content } });
-    const material = scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
+    const material = scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
     expect(material.options.shaderLanguage).toBe(ShaderLanguage.WGSL);
-    expect(material.options.defines).not.toContain("#define PANORAMA_WEBGL2");
+    expect(material.options.defines).not.toContain("#define SPHERE_WEBGL2");
     renderer.dispose();
   });
 });
 
-describe("panorama renderer camera frame", () => {
+describe("sphere renderer camera frame", () => {
   it("follows a camera moved after it was read in the same rendered frame", () => {
     const { camera, renderer } = setup();
     const before = renderer.cameraFrame()!;
@@ -131,6 +131,22 @@ describe("panorama renderer camera frame", () => {
     const distance = Math.hypot(...frame.eye);
     for (let axis = 0; axis < 3; axis++) expect(frame.eye[axis] + frame.view.forward[axis] * distance).toBeCloseTo(0, 6);
   });
+
+  it("projects into the camera's viewport when the world is only part of the canvas", () => {
+    const { camera, engine, renderer } = setup();
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) } as HTMLCanvasElement;
+    engine.getRenderingCanvas = () => canvas;
+    // The world is the bottom three quarters; Babylon measures its viewport from the bottom.
+    camera.viewport = new Viewport(0, 0, 1, 0.75);
+    const frame = renderer.cameraFrame()!;
+    const centre = renderer.project(frame.view.forward, frame)!;
+    expect(centre.x).toBeCloseTo(400, 6);
+    expect(centre.y).toBeCloseTo(375, 6);
+    // Halfway up the view: a quarter of the viewport's 450 px above its centre.
+    const tanHalf = Math.tan(frame.view.verticalFovRad / 2);
+    const raised = renderer.project(normalize(frame.view.forward.map((value, axis) => value + frame.view.up[axis] * tanHalf * 0.5) as Vec3), frame)!;
+    expect(raised.y).toBeCloseTo(262.5, 6);
+  });
 });
 
 describe("orb geometry", () => {
@@ -144,7 +160,7 @@ describe("orb geometry", () => {
   });
 });
 
-describe("panorama renderer experiments", () => {
+describe("sphere renderer experiments", () => {
   const content: Mat3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
   // WebGL 1: the null engine has no uniform buffers to render a WebGL 2 frame with.
   const webGl = (engine: NullEngine) => {
@@ -201,7 +217,7 @@ describe("panorama renderer experiments", () => {
   it("draws immersion at full opacity without blending, and a fade with it", () => {
     const { renderer, scene } = setup(webGl, { opaqueImmersion: true });
     const texture = new BaseTexture(scene);
-    const material = () => scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
+    const material = () => scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
     renderer.immersion.show({ source: { texture, kind: "cube", content }, next: { texture, kind: "equirectangular", content }, mix: 0.5 });
     expect(material().needAlphaBlending()).toBe(false);
     renderer.immersion.show({ source: { texture, kind: "cube", content }, opacity: 0.5 });
@@ -220,21 +236,21 @@ describe("panorama renderer experiments", () => {
   it("switches every orb and the immersion to the lean WebGL shaders, and leaves WebGPU's alone", () => {
     const { renderer, scene } = setup(webGl);
     renderer.addOrb("place", orbState(scene));
-    const orb = scene.getMaterialByName("panorama-orb-material-place") as ShaderMaterial;
+    const orb = scene.getMaterialByName("sphere-orb-material-place") as ShaderMaterial;
     renderer.immersion.show({ source: { texture: new BaseTexture(scene), kind: "cube", content } });
-    const immersion = () => scene.getMeshByName("panorama-immersion")!.material as ShaderMaterial;
-    expect(orb.options.defines).not.toContain("#define PANORAMA_LEAN");
-    expect(immersion().options.defines).not.toContain("#define PANORAMA_LEAN");
+    const immersion = () => scene.getMeshByName("sphere-immersion")!.material as ShaderMaterial;
+    expect(orb.options.defines).not.toContain("#define SPHERE_LEAN");
+    expect(immersion().options.defines).not.toContain("#define SPHERE_LEAN");
     renderer.setExperiments({ shaders: true });
-    expect(orb.options.defines).toContain("#define PANORAMA_LEAN");
-    expect(immersion().options.defines).toContain("#define PANORAMA_LEAN");
+    expect(orb.options.defines).toContain("#define SPHERE_LEAN");
+    expect(immersion().options.defines).toContain("#define SPHERE_LEAN");
     renderer.setExperiments({ shaders: false });
-    expect(orb.options.defines).not.toContain("#define PANORAMA_LEAN");
+    expect(orb.options.defines).not.toContain("#define SPHERE_LEAN");
     renderer.dispose();
 
     const gpu = setup(engine => Object.defineProperties(engine, { isWebGPU: { value: true }, _device: { value: {} } }), { shaders: true });
     gpu.renderer.addOrb("place", orbState(gpu.scene));
-    expect((gpu.scene.getMaterialByName("panorama-orb-material-place") as ShaderMaterial).options.defines).not.toContain("#define PANORAMA_LEAN");
+    expect((gpu.scene.getMaterialByName("sphere-orb-material-place") as ShaderMaterial).options.defines).not.toContain("#define SPHERE_LEAN");
     gpu.renderer.dispose();
   });
 });

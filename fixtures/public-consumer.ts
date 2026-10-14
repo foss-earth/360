@@ -1,11 +1,11 @@
 /** Compile only against the installed exports map; no sibling source aliases. */
-import { createBuiltInRepresentations, validateViewerAsset, createViewerSelection, PANORAMA_GAMEPAD_ACTIONS, createPanoramaProfileContribution, type PanoramaProfileContribution, type ImageViewer, type PublishedImageViewer, type ViewerResourceReadings, type ViewerWorldMath } from "@foss-earth/360";
-import { createImageViewer, type ImageViewerOptions } from "@foss-earth/360/viewer";
-import type { ViewerResources } from "@foss-earth/360/viewer";
-import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "@foss-earth/360/resources";
-import { createViewerTabs, type ViewerPanelPorts } from "@foss-earth/360/panels";
-import { VIEWER_PARAMETERS, VIEWER_SECTION_TITLES, VIEWER_EXPERIMENT_IDS, VIEWER_EXPERIMENT_PARAMETERS } from "@foss-earth/360/settings";
-import { preparePanorama } from "@foss-earth/360/preparation";
+import { createBuiltInRepresentations, validateViewerAsset, createViewerSelection, SPHERE_GAMEPAD_ACTIONS, createSphereProfileContribution, type SphereProfileContribution, type ImageViewer, type PublishedImageViewer, type ViewerResourceReadings, type ViewerWorldMath } from "@foss-earth/image-viewer";
+import { createImageViewer, type ImageViewerOptions } from "@foss-earth/image-viewer/viewer";
+import type { ViewerResources } from "@foss-earth/image-viewer/viewer";
+import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "@foss-earth/image-viewer/resources";
+import { createViewerTabs, type ViewerPanelPorts } from "@foss-earth/image-viewer/panels";
+import { VIEWER_PARAMETERS, VIEWER_SECTION_TITLES, VIEWER_EXPERIMENT_IDS, VIEWER_EXPERIMENT_PARAMETERS } from "@foss-earth/image-viewer/settings";
+import { prepareSphere } from "@foss-earth/image-viewer/preparation";
 import { levelUp, orbitAngles, orbitLook, pointGeodetic, glideSettling } from "@foss-earth/engine/core";
 import { createStandardGlobeProfile, type GlobeGamepadAdapterOptions, type GlobeProfileContributions } from "@foss-earth/engine/gamepad";
 import { DEFAULT_BINDING_TRANSFORM, type BindingSpec } from "@felipegalind0/gamepad-tools/core";
@@ -17,11 +17,11 @@ export const groupedFiles = (services: ReadonlyMap<string, ImageFileService>): N
     if (!service) throw new Error("The host has not supplied this exact saved-media group.");
     return service;
   };
-export const panoramaContribution: PanoramaProfileContribution = createPanoramaProfileContribution(DEFAULT_BINDING_TRANSFORM);
-export const globeContribution: GlobeProfileContributions = panoramaContribution;
-export const controllerOptions: GlobeGamepadAdapterOptions = { featureActions: PANORAMA_GAMEPAD_ACTIONS };
+export const sphereContribution: SphereProfileContribution = createSphereProfileContribution(DEFAULT_BINDING_TRANSFORM);
+export const globeContribution: GlobeProfileContributions = sphereContribution;
+export const controllerOptions: GlobeGamepadAdapterOptions = { featureActions: SPHERE_GAMEPAD_ACTIONS };
 export const controllerProfile = createStandardGlobeProfile(0, undefined, globeContribution);
-export const panoramaBindings: readonly BindingSpec[] = panoramaContribution.bindings(3, 0.21);
+export const sphereBindings: readonly BindingSpec[] = sphereContribution.bindings(3, 0.21);
 export const tileSelection: ViewerResourceCompositionPorts["tiles"]["selection"] = representation => ({
   texelsPerPixel: 1, marginDeg: 0,
   levelCap: Math.max(0, Math.min(representation.levelBytes.length - 1, Math.floor(Math.log2(16 / (4 * representation.tileSize))))),
@@ -43,7 +43,7 @@ export const publishedTilePreview=(value:PublishedImageViewer):NonNullable<Viewe
 export const cachedWholeSource=(value:ComposedImageSource):ComposedImageSource["source"]=>value.source;
 export const resources=(ports:ViewerResourceCompositionPorts)=>createViewerResources(ports);
 export const panels=(ports:ViewerPanelPorts)=>createViewerTabs(ports);
-export { createBuiltInRepresentations,validateViewerAsset,createViewerSelection,VIEWER_PARAMETERS,VIEWER_SECTION_TITLES,VIEWER_EXPERIMENT_IDS,VIEWER_EXPERIMENT_PARAMETERS,preparePanorama };
-export const bookkeepingId: "renderer.experiments.panoramaBookkeeping" = VIEWER_EXPERIMENT_IDS.panoramaBookkeeping;
+export { createBuiltInRepresentations,validateViewerAsset,createViewerSelection,VIEWER_PARAMETERS,VIEWER_SECTION_TITLES,VIEWER_EXPERIMENT_IDS,VIEWER_EXPERIMENT_PARAMETERS,prepareSphere };
+export const bookkeepingId: "renderer.experiments.panoramaBookkeeping" = VIEWER_EXPERIMENT_IDS.sphereBookkeeping;
 export const opaqueImmersionId: "renderer.experiments.opaqueImmersion" = VIEWER_EXPERIMENT_IDS.opaqueImmersion;
-export const panoramaShadersId: "renderer.experiments.panoramaShaders" = VIEWER_EXPERIMENT_IDS.panoramaShaders;
+export const sphereShadersId: "renderer.experiments.panoramaShaders" = VIEWER_EXPERIMENT_IDS.sphereShaders;

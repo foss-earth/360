@@ -4,7 +4,7 @@ import { add, dot, length, normalize, scale, sub, type Vec3 } from "@foss-earth/
 
 /** Camera to displayed marker, the quantities every mapping and test shares. */
 export interface OrbGeometry {
-  /** Unit axis from the camera to the marker centre; null inside the sphere. */
+  /** Unit axis from the camera to the marker centre; null inside the orb. */
   axis: Vec3 | null;
   distance: number;
   radius: number;
@@ -21,7 +21,7 @@ export function orbGeometry(cameraToMarker: Vec3, radius: number): OrbGeometry {
 
 /**
  * The flat (rectilinear) window: which world direction a covered view ray
- * shows. Identity inside the sphere and once α ≥ βR; otherwise
+ * shows. Identity inside the orb and once α ≥ βR; otherwise
  * D ∝ a + (tan βR / tan α)(v − (a·v)a)/(a·v), which is
  * θ = atan(tan δ tan βR / tan α) written without angles. Null for a ray the
  * orb does not cover.
@@ -103,7 +103,7 @@ export function viewportCovered(geometry: OrbGeometry, view: ViewBasis): boolean
   return VIEWPORT_CORNERS.every(([x, y]) => dot(a, viewRay(view, x, y)) >= threshold - 1e-12);
 }
 
-/** Largest angle from the axis to a viewport corner, radians; ≥ π/2 means an exterior sphere can never cover it. */
+/** Largest angle from the axis to a viewport corner, radians; ≥ π/2 means an orb seen from outside can never cover it. */
 export function maximumCornerAngle(axis: Vec3, view: ViewBasis): number {
   return Math.max(...VIEWPORT_CORNERS.map(([x, y]) => Math.acos(Math.max(-1, Math.min(1, dot(axis, viewRay(view, x, y)))))));
 }

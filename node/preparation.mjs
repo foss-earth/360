@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Prepares one panorama for a `foss-earth-scene` v1 manifest: validates the
+ * Prepares one sphere for a `foss-earth-scene` v1 manifest: validates the
  * input, its pose and colour; applies EXIF orientation once and converts to
  * opaque sRGB; and writes preview cubes, whole immersion variants and tiled
  * cubes from the one normalized image, with a manifest fragment and a
@@ -11,7 +11,7 @@
  *     --out build/prepared-scenes/garden
  *
  * Input: a full 2:1 equirectangular JPEG or PNG, or `synthetic:cardinal[:width]`
- * for the reference renderer's N/E/S/W text panorama.
+ * for the reference renderer's N/E/S/W text sphere.
  * Pose: `--pose file.json` holding {headingDeg, pitchDeg, rollDeg, provenance},
  * or a GPano pose in the input's XMP. Without either the tool stops: the
  * viewer never invents a survey-aligned north.
@@ -40,10 +40,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyOrientation, colourIsSrgb, decodeJpeg, decodePng, dropOpaqueAlpha, encodeJpeg, encodePng, readGPano, resizeArea, sniffImage, toLinearImage, toSrgbImage } from "@foss-earth/images/node";
-import { CUBE_FACE_NAMES } from "@foss-earth/cubemap/core";
-import { renderCubeFace } from "@foss-earth/cubemap/preparation";
-import { cubePreparationPlan, equirectPyramid, makeCardinalPanorama, validatePreparationCoverage } from "@foss-earth/equirectangular/preparation";
-import { renderCubeTile } from "@foss-earth/tiled-cubemap/preparation";
+import { CUBE_FACE_NAMES } from "@foss-earth/sphere-cubemap/core";
+import { renderCubeFace } from "@foss-earth/sphere-cubemap/preparation";
+import { cubePreparationPlan, equirectPyramid, makeCardinalSphere, validatePreparationCoverage } from "@foss-earth/sphere-equirectangular/preparation";
+import { renderCubeTile } from "@foss-earth/sphere-tiled-cubemap/preparation";
 
 /**
  * Part of every asset's revision. Raise it with any change that makes this
@@ -99,7 +99,7 @@ function readInput(input) {
   if (input.startsWith("synthetic:")) {
     const [, kind, width] = input.split(":");
     if (kind !== "cardinal") throw new Error(`unknown synthetic input ${kind}; the only one is synthetic:cardinal`);
-    const image = makeCardinalPanorama(width ? Number(width) : 2048);
+    const image = makeCardinalSphere(width ? Number(width) : 2048);
     return {
       image,
       source: { kind: "synthetic", name: "cardinal", description: "The reference renderer's N/E/S/W text panorama with a 30° grid and polar details", width: image.width, height: image.height },
@@ -145,7 +145,7 @@ function readPose(options, gpano) {
   throw new Error("no pose: pass --pose with headingDeg, pitchDeg, rollDeg and provenance. The input has no GPano pose, and the viewer never invents one.");
 }
 
-export function preparePanorama(argv, ports = {}) {
+export function prepareSphere(argv, ports = {}) {
   const options = parseArgs(argv);
   if (options.help || !options.input) {
     const help = readFileSync(scriptPath, "utf8").split("*/")[0];
@@ -267,7 +267,7 @@ export function preparePanorama(argv, ports = {}) {
     tool: "scripts/prepare-panorama.mjs",
     toolVersion: TOOL_VERSION,
     scriptSha256: sha256(readFileSync(scriptPath)),
-    components: Object.fromEntries(["@foss-earth/images/node", "@foss-earth/cubemap/preparation", "@foss-earth/equirectangular/preparation", "@foss-earth/tiled-cubemap/preparation"].map(entry => [entry, { entrySha256: sha256(readFileSync(fileURLToPath(import.meta.resolve(entry)))) }])),
+    components: Object.fromEntries(["@foss-earth/images/node", "@foss-earth/sphere-cubemap/preparation", "@foss-earth/sphere-equirectangular/preparation", "@foss-earth/sphere-tiled-cubemap/preparation"].map(entry => [entry, { entrySha256: sha256(readFileSync(fileURLToPath(import.meta.resolve(entry)))) }])),
     sourceRevision: "90e23b3ee96f53ec5900afc5991a21fffa58649d",
     compatibility: "toolVersion 2 resamples without reading past the source's last row or column, where toolVersion 1 left some images' last row black; otherwise as toolVersion 1, which retains original intended image bytes, paths and revision inputs; exact split-artifact byte comparison pending; component entry digests replace monolithic libSha256",
     node: process.version,

@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createImageSessionBroker, createImageSourceCache, type ImageSourceCache } from "@foss-earth/images";
 import { createImageFileService } from "@foss-earth/images/browser";
-import type { CubeRepresentationRecord } from "@foss-earth/cubemap";
-import { tileAtlasLayout, type TiledCubeRepresentationRecord } from "@foss-earth/tiled-cubemap";
+import type { CubeRepresentationRecord } from "@foss-earth/sphere-cubemap";
+import { tileAtlasLayout, type TiledCubeRepresentationRecord } from "@foss-earth/sphere-tiled-cubemap";
 import { createViewerResources, type ComposedImageSource, type ViewerResourceCompositionPorts } from "../src/resources.js";
 import { deferred, fixture, flush, image } from "./fixtures/viewer.js";
 

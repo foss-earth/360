@@ -5,10 +5,10 @@ import type { GlobeRuntime } from "@foss-earth/engine/babylon";
 import type { PublishedImageViewer, ViewerPosePorts, ViewerWorldMath } from "./ports.js";
 import type { ViewerNavigationLease, ViewerNavigationPorts } from "./viewer.js";
 import { createFeatureFramePreparation } from "@foss-earth/renderer";
-import { tileAtlasLayout, tiledCubeTileCount, type TiledCubeRepresentationRecord } from "@foss-earth/tiled-cubemap";
+import { tileAtlasLayout, tiledCubeTileCount, type TiledCubeRepresentationRecord } from "@foss-earth/sphere-tiled-cubemap";
 import type { ImageRepresentation } from "@foss-earth/images";
 import type { ViewerRepresentation } from "./catalogue.js";
-import type { PanoramaRenderer } from "./renderer.js";
+import type { SphereRenderer } from "./renderer.js";
 
 export type GlobeViewerRuntime = Pick<GlobeRuntime, "acquireNavigation" | "placeNavigationCamera" |
   "restoreNavigationSnapshot" | "glideNavigationCamera" | "getCameraHandling">;
@@ -71,7 +71,7 @@ export function createGlobeViewerNavigation(runtime: GlobeViewerRuntime, ports: 
 /** Actual Scenes.projectLink binding, retaining geographic heading/pitch semantics. */
 export function createGlobeViewerProjection(ports: {
   viewer: Pick<PublishedImageViewer, "status" | "describeImage" | "describeResources">;
-  renderer: Pick<PanoramaRenderer, "cameraFrame" | "project">;
+  renderer: Pick<SphereRenderer, "cameraFrame" | "project">;
   runtime: Pick<GlobeRuntime, "getPresentationView">;
 }) {
   return (direction: { headingDeg: number; pitchDeg: number }): { x: number; y: number } | null => {

@@ -2,7 +2,7 @@
 
 Status: implemented source draft; public consumers and regressions UNRUN.
 
-`@foss-earth/360/globe` is an optional Engine-to-viewer adapter. Engine never
+`@foss-earth/image-viewer/globe` is an optional Engine-to-viewer adapter. Engine never
 imports 360. The existing pure root, viewer and representation contracts remain
 available; importing the optional entry creates no device, broker, clock or
 viewer. Its Engine peer uses the existing exact owner version and is optional.
@@ -29,7 +29,7 @@ viewer. Its Engine peer uses the existing exact owner version and is optional.
   `describeResources` alone is not the Scenes description contract. This
   adapter never registers an additional frame subscription.
 
-`@foss-earth/360/globe-browser` exports
+`@foss-earth/image-viewer/globe-browser` exports
 `createGlobeViewerInput(runtime, canvas, engineLeaseFor, ports)`. `ports` supplies
 monotonic time, key ownership, abort reason and optional signal/error channel.
 The result supplies `input`, `wheels`, `dispose`. Actual look-input, native
@@ -38,10 +38,10 @@ Every attached listener is released on abort/disposal; partial attachment and
 throwing cleanup remain observable. There is no ambient canvas/window/session on
 import.
 
-`createImageViewer` in `@foss-earth/360/viewer` returns additive
+`createImageViewer` in `@foss-earth/image-viewer/viewer` returns additive
 `SettledPublishedImageViewer`, with `whenSettled(): Promise<void>`; it accepts a
 host `signal` and optional `onRetirementError`. `createViewerResources` in
-`@foss-earth/360/resources` returns `SettledViewerResources`, including `retire`
+`@foss-earth/image-viewer/resources` returns `SettledViewerResources`, including `retire`
 and `whenSettled`. Resources borrow the existing Images broker/source cache/files,
 Renderer uploader/region device and Preview sources. The host retires its cache,
 previews and features too. Late decode/acquisition is actually awaited and released;
@@ -53,8 +53,8 @@ a resolved placeholder.
 ```ts
 import { createGlobeViewerFrameBinding, createGlobeViewerProjection,
   createGlobeViewerNavigation, globeViewerMath, globeViewerPoses }
-  from "@foss-earth/360/globe";
-import { createGlobeViewerInput } from "@foss-earth/360/globe-browser";
+  from "@foss-earth/image-viewer/globe";
+import { createGlobeViewerInput } from "@foss-earth/image-viewer/globe-browser";
 
 const nav = createGlobeViewerNavigation(globe, focusPorts);
 const input = createGlobeViewerInput(globe, canvas, nav.engineLeaseFor, inputPorts);

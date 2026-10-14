@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import * as core from "@foss-earth/360";
-import * as globe from "@foss-earth/360/globe";
-import * as browser from "@foss-earth/360/globe-browser";
-import * as viewer from "@foss-earth/360/viewer";
-import * as resources from "@foss-earth/360/resources";
+import * as core from "@foss-earth/image-viewer";
+import * as globe from "@foss-earth/image-viewer/globe";
+import * as browser from "@foss-earth/image-viewer/globe-browser";
+import * as viewer from "@foss-earth/image-viewer/viewer";
+import * as resources from "@foss-earth/image-viewer/resources";
 assert.equal(typeof globalThis.document, "undefined");
 assert.equal(typeof globalThis.window, "undefined");
 assert.equal("createGlobeViewerNavigation" in core, false);

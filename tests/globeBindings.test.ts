@@ -18,7 +18,7 @@ it("keeps the actual native lease and refuses another host's lease while returni
   expect(() => binding.navigation.place({ ...got.lease } as ViewerNavigationLease, {} as never)).toThrow("another host");
   f.viewer.dispose();
 });
-it("feeds the real panorama projection a geographic view and reuses the borrowed frame", () => {
+it("feeds the real sphere projection a geographic view and reuses the borrowed frame", () => {
   const f = fixture(), input = image(); input.details = { capture: { longitudeDeg: 0, latitudeDeg: 0 } } as typeof input.details;
   const project = vi.fn(() => ({ x: 11, y: 22 })), frame = {} as never;
   const projection = createGlobeViewerProjection({ viewer: { ...f.viewer, status: () => ({ ...f.viewer.status(), active: "a" }), describeImage: () => input },
@@ -40,6 +40,17 @@ it("calls onFrame once through existing preparation and never owns another subsc
   binding.framePreparation.prepare({ nowMs: 20, deltaSeconds: .016 }); expect(onFrame).toHaveBeenCalledExactlyOnceWith({ now: 20, dtMs: 16 });
   expect(requestRender).toHaveBeenCalledOnce(); expect(subscribe).not.toHaveBeenCalled(); current = false;
   binding.framePreparation.prepare({ nowMs: 21, deltaSeconds: .016 }); expect(onFrame).toHaveBeenCalledTimes(1); f.viewer.dispose();
+});
+it("converts a wheel into the measured view instead of the canvas origin", () => {
+  const canvas = document.createElement("canvas"); document.body.append(canvas);
+  const seen: ({ x: number; y: number } | null)[] = [];
+  const model = { drag() {}, release() {}, wheel(_delta: number, at?: { x: number; y: number } | null) { seen.push(at ?? null); }, swipe() {}, pinchBy() {}, touchPinch() {}, setRates() {}, step: () => false, moving: () => false, cancelInertia() {} };
+  const binding = createGlobeViewerInput({ getInputMode: () => "mouse", setNavigationIntentHandler: () => () => {} }, canvas, () => ({}) as never,
+    { nowMs: () => 0, controlTakesKey: () => false, abortReason: () => new Error("input"), surfaceRect: () => ({ left: 100, top: 40, width: 800, height: 600 }) });
+  const attached = binding.input.attach({ model, lease: {} as ViewerNavigationLease, requestFrame() {}, userInput() {}, exit() {} });
+  canvas.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100, clientX: 300, clientY: 200 }));
+  expect(seen).toEqual([{ x: 200, y: 160 }]);
+  attached.detach(); canvas.remove();
 });
 it("removes cancellation input handlers on host abort and keeps the held press for handback", () => {
   const canvas = document.createElement("canvas"), host = new AbortController(), cancel = new AbortController(); document.body.append(canvas);

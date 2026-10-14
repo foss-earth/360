@@ -1,16 +1,16 @@
 # Panorama controller and source-dependent tile ports
 
-The pure `@foss-earth/360` and `@foss-earth/360/core` entries now export:
+The pure `@foss-earth/image-viewer` and `@foss-earth/image-viewer/core` entries now export:
 
 ```ts
-const PANORAMA_GAMEPAD_ACTIONS: readonly ActionDescriptor[];
-interface PanoramaProfileContribution {
+const SPHERE_GAMEPAD_ACTIONS: readonly ActionDescriptor[];
+interface SphereProfileContribution {
   readonly contexts: readonly string[];
   bindings(slot: number, deadzone: number): readonly BindingSpec[];
 }
-function createPanoramaProfileContribution(
+function createSphereProfileContribution(
   transform: Readonly<BindingTransformSpec>,
-): PanoramaProfileContribution;
+): SphereProfileContribution;
 ```
 
 Only gamepad-tools public core types are imported by this module. The host
@@ -21,13 +21,13 @@ the released public contracts:
 
 ```ts
 import { DEFAULT_BINDING_TRANSFORM } from "@felipegalind0/gamepad-tools/core";
-import { PANORAMA_GAMEPAD_ACTIONS, createPanoramaProfileContribution } from "@foss-earth/360";
+import { SPHERE_GAMEPAD_ACTIONS, createSphereProfileContribution } from "@foss-earth/image-viewer";
 import { createGlobeGamepadAdapter, createStandardGlobeProfile } from "@foss-earth/engine/gamepad";
 
-const contribution = createPanoramaProfileContribution(DEFAULT_BINDING_TRANSFORM);
+const contribution = createSphereProfileContribution(DEFAULT_BINDING_TRANSFORM);
 const profile = createStandardGlobeProfile(slot, deadzone, contribution);
 const adapter = createGlobeGamepadAdapter(target, {
-  featureActions: PANORAMA_GAMEPAD_ACTIONS,
+  featureActions: SPHERE_GAMEPAD_ACTIONS,
   getContext: () => navigation.currentContext(),
 });
 ```

@@ -10,10 +10,10 @@ describe("host-composed image tabs",()=>{
     const metadata=structuredClone({asset:input.asset,credits:input.credits,details:input.details,pose:input.pose});
     const tabs=createViewerTabs({document,viewer:{status:()=>state,subscribe(fn){listener=fn;fn(state);return off;},exit,activateAction},image:()=>input,sectionTitle:(_tab,section)=>section,parameterSection({main}){const element=document.createElement("div");if(main)element.append(main);return{element,destroy};},sections(entries){const element=document.createElement("div");element.append(...entries.map(entry=>entry.element));return{element,destroy};},representationText:r=>r.id,detail:()=>({shown:"the test image"})});
     state={phase:"immersive",active:"a",target:null};listener(state);expect(tabs.getSnapshot()).toEqual({title:"360: Image a",onScreen:true});
-    expect(tabs.panorama.querySelector(".foss-earth-panorama-photograph")?.textContent).toBe("A view from campus.In Campus tour.");expect(tabs.panorama.querySelector("a")).toBeNull();
+    expect(tabs.sphere.querySelector(".foss-earth-sphere-photograph")?.textContent).toBe("A view from campus.In Campus tour.");expect(tabs.sphere.querySelector("a")).toBeNull();
     expect({asset:input.asset,credits:input.credits,details:input.details,pose:input.pose}).toEqual(metadata);
-    tabs.panorama.querySelector<HTMLButtonElement>("button")!.click();expect(activateAction).toHaveBeenCalledWith("next");tabs.leave();expect(exit).toHaveBeenCalledOnce();
-    expect(tabs.panorama.firstElementChild?.classList.contains("foss-earth-panorama-photograph")).toBe(true);
+    tabs.sphere.querySelector<HTMLButtonElement>("button")!.click();expect(activateAction).toHaveBeenCalledWith("next");tabs.leave();expect(exit).toHaveBeenCalledOnce();
+    expect(tabs.sphere.firstElementChild?.classList.contains("foss-earth-sphere-photograph")).toBe(true);
     tabs.destroy();tabs.destroy();expect(off).toHaveBeenCalledOnce();expect(destroy).toHaveBeenCalledTimes(7);listener({phase:"overview",active:null,target:null});expect(tabs.getSnapshot().title).toBe("360: Image a");
   });
 });

@@ -6,11 +6,12 @@
 import { dot, length, scale, sub, type Vec3 } from "@foss-earth/images";
 import type { ImageRepresentation } from "@foss-earth/images";
 import { createLookModel, type LookModel, type LookSettings, type LookState } from "./look.js";
+import type { SphereViewport } from "./sphereCamera.js";
 import { flightIn, flightOut, flightMotion, poseView, type Flight, type FlightPose } from "./flight.js";
 import { expansionTargetRadius, handoffReady, orbGeometry } from "./math.js";
 import { interpolateView } from "./views.js";
 import type { SettledPublishedImageViewer, PreparedViewerImage, ViewerAbortSignal, ViewerImageInput, ViewerLook, ViewerNavigationPresentation, ViewerNavigationSnapshot, ViewerPosePorts, ViewerStatus, ViewerWorldMath } from "./ports.js";
-import type { ImmersionSource, OrbAppearance, PanoramaCameraFrame, PanoramaOrb, PanoramaRenderer } from "./renderer.js";
+import type { ImmersionSource, OrbAppearance, SphereCameraFrame, SphereOrb, SphereRenderer } from "./renderer.js";
 
 export interface ViewerSource {
   readonly key?: string;
@@ -22,7 +23,7 @@ export interface ViewerSource {
   /** Called after the outgoing hold is released and the new source is visible. */
   settleReplacement(): void;
   /** Tiled sources consume this same frame; no independent scheduler. */
-  onFrame?(frame: PanoramaCameraFrame, now: number, content: ViewerImageInput["placement"]["content"]): boolean;
+  onFrame?(frame: SphereCameraFrame, now: number, content: ViewerImageInput["placement"]["content"]): boolean;
   /** Progressive replacement stays behind a sharper whole source until its current view is covered. */
   viewReady?(): boolean;
   detail?(): { representation: string; loading?: string | null; limitation?: string | null; progress?: readonly string[] };
@@ -69,7 +70,7 @@ export interface ViewerSettings {
   appearance: OrbAppearance;
   look: LookSettings;
   entryOrientation: "authored" | "geographic";
-  /** The vertical FOV, deg, a panorama entered from the map opens at, within the look's range; null or absent keeps the camera's. */
+  /** The vertical FOV, deg, a sphere entered from the map opens at, within the look's range; null or absent keeps the camera's. */
   entryFovDeg?: number | null;
   flightDurationMs: number;
   expandDurationMs: number;
@@ -81,7 +82,7 @@ export interface ViewerSettings {
   previewHoldMs: number | null;
 }
 export interface ImageViewerOptions {
-  renderer: Pick<PanoramaRenderer, "available" | "unavailableReason" | "addOrb" | "immersion" | "setAppearance" | "cameraFrame" | "pick" | "project">;
+  renderer: Pick<SphereRenderer, "available" | "unavailableReason" | "addOrb" | "immersion" | "setAppearance" | "cameraFrame" | "pick" | "project">;
   resources: ViewerResources;
   world: ViewerWorldMath;
   poses: ViewerPosePorts;
@@ -90,6 +91,8 @@ export interface ImageViewerOptions {
   settings(): ViewerSettings;
   now(): number;
   devicePixelsPerCss(): number;
+  /** The measured view, in CSS pixels. Live zoom uses the same rays as a tab; without it, zoom stays at the centre. */
+  viewport?: () => SphereViewport | null;
   createAbortController(): AbortController;
   requestRender(): void;
   holdRendering(): () => void;
@@ -102,7 +105,7 @@ export interface ImageViewerOptions {
 interface Entry {
   input: ViewerImageInput;
   drawId: string;
-  orb: PanoramaOrb;
+  orb: SphereOrb;
   controller: AbortController;
   visible: boolean;
   disposed: boolean;
@@ -367,7 +370,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     navigation.glide(lease, presented(current), marker, { velocity, turn, fovRad: lease.overview.camera.fov, inputSince: flying.startedMs, press, touches });
   }
   function stopFade(): void { fading?.stop(); fading = null; }
-  function fadeSphere(entry: Entry, flying: Flying, done: () => void): void {
+  function fadeOrb(entry: Entry, flying: Flying, done: () => void): void {
     stopFade(); const curve = options.world.glideSettling(navigation.inertiaDecay()); const controller = options.createAbortController();
     const revealed = flying.reveal(smooth(flying.t)); let finished = false;
     const finish = (): void => { if (finished) return; finished = true; if (fading === current) fading = null; if (live(entry)) { entry.orb.setExpansion(null); unfreeze(entry); } done(); };
@@ -403,7 +406,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     const look = createLookModel(view, () => options.settings().look, next => {
       if (!state || immersion !== state || state.leaving) return;
       lease.setPresentationView(pose(state.entry, geoView(next, state.roll))); emit();
-    });
+    }, () => options.viewport?.() ?? null);
     const stopLook = (): void => { frames.delete(tick); release?.(); release = null; };
     const tick = (): void => { const now = options.now(); const moving = look.step(now - stepped); stepped = now; if (!moving) stopLook(); };
     const requestFrame = (): void => { options.requestRender(); if (!release && look.moving() && !lease.released) { stepped = options.now(); frames.add(tick); release = lease.holdRendering(); } };
@@ -585,7 +588,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
       const replaced = operation !== op.controller || !entry.visible;
       if (lease && !lease.released && !immersion) {
         renderer.immersion.show(null);
-        if (flying && !disposed) { handBack(lease, flying, true, input.press(), input.touches?.() ?? null); if (!replaced) fadeSphere(entry, flying, () => {}); }
+        if (flying && !disposed) { handBack(lease, flying, true, input.press(), input.touches?.() ?? null); if (!replaced) fadeOrb(entry, flying, () => {}); }
         else navigation.restore(lease.overview, lease);
         lease.release("cancelled");
       }
@@ -624,7 +627,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     if (flying && handed) handBack(state.lease, flying, true, input.press(), input.touches?.() ?? null);
     else { entry.orb.setExpansion(null); if (flight) navigation.restore(flight.end, state.lease); }
     const shown = teardown(state, !handed); state.lease.release("exit");
-    if (flying && handed) fadeSphere(entry, flying, () => { shown?.release(); settlePreviewReplacements(entry); });
+    if (flying && handed) fadeOrb(entry, flying, () => { shown?.release(); settlePreviewReplacements(entry); });
     phase = "overview"; target = null; navigation.returnFocus(state.lease); op.stop(); emit();
   }
   function exit(): void {

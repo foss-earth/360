@@ -1,7 +1,7 @@
 /** Optional DOM image-details tabs. The host supplies its UI sections and image metadata. */
 import type { ImageRepresentation } from "@foss-earth/images";
 import type { ImageViewer, ViewerImageInput, ViewerStatus } from "./ports.js";
-import { PANORAMA_TAB, PANORAMA_SETTINGS_TAB } from "./settings.js";
+import { SPHERE_TAB, SPHERE_SETTINGS_TAB } from "./settings.js";
 
 export interface ImageDetailReading {
   shown?: string | null;
@@ -27,7 +27,7 @@ export interface ViewerPanelPorts {
   openSettings?():void;
 }
 export interface ViewerTabsSnapshot { title:string|null;onScreen:boolean }
-export interface ViewerTabs { panorama:HTMLElement;settings:HTMLElement;getSnapshot():ViewerTabsSnapshot;subscribe(listener:()=>void):()=>void;leave():void;destroy():void }
+export interface ViewerTabs { sphere:HTMLElement;settings:HTMLElement;getSnapshot():ViewerTabsSnapshot;subscribe(listener:()=>void):()=>void;leave():void;destroy():void }
 const listed = (items:readonly (string|number)[]):string => items.length<=1 ? items.join("") : `${items.slice(0,-1).join(", ")} and ${items.at(-1)}`;
 export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
   const { document:doc } = ports;
@@ -35,15 +35,15 @@ export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
   function el<K extends keyof HTMLElementTagNameMap>(tag:K, className?:string, text?:string):HTMLElementTagNameMap[K] { const item=doc.createElement(tag);if(className)item.className=className;if(text!==undefined)item.textContent=text;return item; }
   const note = (text:string) => el("p","foss-earth-choices__note",text);
   const button = (text:string, action:()=>void) => { const item=el("button","foss-earth-choice foss-earth-scene-button",text);item.type="button";item.addEventListener("click",action);return item; };
-  const photograph=el("div","foss-earth-choices foss-earth-panorama-photograph"), links=el("div","foss-earth-choices"), detail=el("div","foss-earth-choices");
+  const photograph=el("div","foss-earth-choices foss-earth-sphere-photograph"), links=el("div","foss-earth-choices"), detail=el("div","foss-earth-choices");
   const section = (tab:string,id:string,main?:HTMLElement,showAll=true) => {const result=ports.parameterSection({tab,section:id,showAll,...(main?{main}:{})});handles.push(result);return result.element;};
-  const panoramaSections=ports.sections([
-    {id:"panorama.links",title:ports.sectionTitle(PANORAMA_TAB,"links"),element:section(PANORAMA_TAB,"links",links,false),defaultOpen:false},
-    {id:"panorama.detail",title:ports.sectionTitle(PANORAMA_TAB,"detail"),element:section(PANORAMA_TAB,"detail",detail),defaultOpen:false},
+  const sphereSections=ports.sections([
+    {id:"panorama.links",title:ports.sectionTitle(SPHERE_TAB,"links"),element:section(SPHERE_TAB,"links",links,false),defaultOpen:false},
+    {id:"panorama.detail",title:ports.sectionTitle(SPHERE_TAB,"detail"),element:section(SPHERE_TAB,"detail",detail),defaultOpen:false},
   ]);
-  const panorama=el("div","foss-earth-panorama-tab");
-  panorama.append(photograph,panoramaSections.element);
-  const settings=ports.sections(["image","looking","entering"].map(id=>({id:`panorama-settings.${id}`,title:ports.sectionTitle(PANORAMA_SETTINGS_TAB,id),element:section(PANORAMA_SETTINGS_TAB,id),defaultOpen:id==="image"})));
+  const sphere=el("div","foss-earth-sphere-tab");
+  sphere.append(photograph,sphereSections.element);
+  const settings=ports.sections(["image","looking","entering"].map(id=>({id:`panorama-settings.${id}`,title:ports.sectionTitle(SPHERE_SETTINGS_TAB,id),element:section(SPHERE_SETTINGS_TAB,id),defaultOpen:id==="image"})));
   function render(status:ViewerStatus):void {
     if(disposed)return;
     const id=["preparing","entering","immersive"].includes(status.phase)? status.active??status.target:null;
@@ -63,5 +63,5 @@ export function createViewerTabs(ports:ViewerPanelPorts):ViewerTabs {
     if(ports.openSettings)detail.append(note("Representation, sharpness, looking and levelling:"),button("360 image settings",()=>{if(!disposed)ports.openSettings?.();}));
   }
   const off=ports.viewer.subscribe(render);render(ports.viewer.status());
-  return {panorama,settings:settings.element,getSnapshot:()=>snapshot,subscribe(listener){if(!disposed)listeners.add(listener);return()=>{listeners.delete(listener);};},leave(){if(!disposed)ports.viewer.exit();},destroy(){if(disposed)return;disposed=true;off();listeners.clear();for(const handle of handles)handle.destroy();panoramaSections.destroy();panorama.remove();settings.destroy();}};
+  return {sphere,settings:settings.element,getSnapshot:()=>snapshot,subscribe(listener){if(!disposed)listeners.add(listener);return()=>{listeners.delete(listener);};},leave(){if(!disposed)ports.viewer.exit();},destroy(){if(disposed)return;disposed=true;off();listeners.clear();for(const handle of handles)handle.destroy();sphereSections.destroy();sphere.remove();settings.destroy();}};
 }

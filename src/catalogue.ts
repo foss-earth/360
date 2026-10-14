@@ -1,7 +1,7 @@
 import type { ImageAsset, ImageDiagnostic, ImageRepresentation, RepresentationHooks } from "@foss-earth/images";
-import { cubeRepresentation, type CubeRepresentationRecord } from "@foss-earth/cubemap";
-import { equirectRepresentation, type EquirectRepresentationRecord } from "@foss-earth/equirectangular";
-import { createTiledCubeRepresentation, type TiledCubeRepresentationRecord, type TiledResourceParameters } from "@foss-earth/tiled-cubemap";
+import { cubeRepresentation, type CubeRepresentationRecord } from "@foss-earth/sphere-cubemap";
+import { equirectRepresentation, type EquirectRepresentationRecord } from "@foss-earth/sphere-equirectangular";
+import { createTiledCubeRepresentation, type TiledCubeRepresentationRecord, type TiledResourceParameters } from "@foss-earth/sphere-tiled-cubemap";
 
 export type BuiltInRepresentation = CubeRepresentationRecord | EquirectRepresentationRecord | TiledCubeRepresentationRecord;
 export interface ViewerRepresentation<R extends ImageRepresentation = ImageRepresentation> {

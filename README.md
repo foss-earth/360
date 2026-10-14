@@ -1,13 +1,13 @@
-# @foss-earth/360
+# @foss-earth/image-viewer
 
-Image viewer composition and camera handover for FOSS Earth. It lets a host app enter a 360 degree panorama (an "orb") or a flat image window from the globe, look around, and fly back out. Everything the viewer needs from the host (renderer, resources, input, camera pose, world geography, settings, clock) is passed in through explicit ports.
+Image viewer composition and camera handover for FOSS Earth. It lets a host app enter a 360 degree sphere (an "orb") or a flat image window from the globe, look around, and fly back out. Everything the viewer needs from the host (renderer, resources, input, camera pose, world geography, settings, clock) is passed in through explicit ports.
 
 ## What this package owns
 
 - Viewer contracts, orb and window ray mathematics, look and flight models, representation selection, and geographic-heading interpolation.
 - The image viewer lifecycle, its resource handling, settings, panel tabs and browser input.
 - Orb, reveal and immersion rendering on the host's Babylon.js scene.
-- Panorama preparation (a Node API and the `foss-earth-prepare-panorama` command).
+- Sphere preparation (a Node API and the `foss-earth-prepare-panorama` command).
 
 Other repositories own related pieces:
 
@@ -27,7 +27,7 @@ Other repositories own related pieces:
 | `./input` | Browser input handlers |
 | `./babylon`, `./shaders`, `./shaders-webgl` | Orb, reveal and immersion rendering on the host scene |
 | `./globe`, `./globe-browser` | Globe bindings |
-| `./preparation` (also `./node`) | `preparePanorama(argv, ports)` |
+| `./preparation` (also `./node`) | `prepareSphere(argv, ports)` |
 | `./prepare-cli` | The `foss-earth-prepare-panorama` command |
 
 Engine geography is supplied through `ViewerWorldMath` and `ViewerPosePorts`. Production code in this package does not import the engine.
@@ -82,7 +82,7 @@ Refinement commits a successfully displayed incoming source before releasing the
 
 ## Settings and panels
 
-`./settings` exports `VIEWER_PARAMETERS` and `VIEWER_SECTION_TITLES`, covering the appearance, motion and active-image parameters with their IDs, homes, bounds, defaults and reasons. `VIEWER_EXPERIMENT_IDS` and `VIEWER_EXPERIMENT_PARAMETERS` cover three experiments: panorama bookkeeping, opaque immersion and shaders. They are included once in `VIEWER_PARAMETERS`, with `renderer.experiments.*` IDs, off by default, with no numeric bounds. They appear under Renderer, Work-saving experiments.
+`./settings` exports `VIEWER_PARAMETERS` and `VIEWER_SECTION_TITLES`, covering the appearance, motion and active-image parameters with their IDs, homes, bounds, defaults and reasons. `VIEWER_EXPERIMENT_IDS` and `VIEWER_EXPERIMENT_PARAMETERS` cover three experiments: sphere bookkeeping, opaque immersion and shaders. They are included once in `VIEWER_PARAMETERS`, with `renderer.experiments.*` IDs, off by default, with no numeric bounds. They appear under Renderer, Work-saving experiments.
 
 The generic Renderer owns that section and its `all` and `presentationCandidates` records. Register them from Renderer together with this package's records in the host's one parameter registry. The settings entry imports no Renderer code and never registers anything globally. Content controls, images loading and saved controls, tiled-cubemap tile controls (including `tileOutlines`) and the preview-sheets `previewSheets` control belong to scenes and those libraries.
 
@@ -90,9 +90,18 @@ The generic Renderer owns that section and its `all` and `presentationCandidates
 
 `./input` takes explicit window, control-key and wheel-classifier ports. Detached handlers do nothing.
 
-## Panorama preparation
+## Sphere preparation
 
-`preparePanorama(argv, ports)` from `./preparation` (also `./node`), and the `foss-earth-prepare-panorama` command, prepare a panorama from a local file. They take local-file arguments, authored or GPano pose and a mandatory credit. They write dated output under `build/prepared-scenes`: preview, whole and tiled files, plus fragment and provenance outputs. Normalization, source eligibility, sampling, cube and tile rendering and the encoders are public APIs of the owning libraries. Preparation uses no network.
+`prepareSphere(argv, ports)` from `./preparation` (also `./node`), and the `foss-earth-prepare-panorama` command, prepare a sphere from a local file. They take local-file arguments, authored or GPano pose and a mandatory credit. They write dated output under `build/prepared-scenes`: preview, whole and tiled files, plus fragment and provenance outputs. Normalization, source eligibility, sampling, cube and tile rendering and the encoders are public APIs of the owning libraries. Preparation uses no network.
+
+## Earlier package name
+
+This package was named `@foss-earth/360`. Nothing is published under that name
+any more: consumers import `@foss-earth/image-viewer`. Records and documents did
+not change: the `panorama-image` asset type, the `cube`,
+`equirectangular` and `tiled-cube` projections, the representation schemas'
+`$id`s and media URLs are as before. The repository keeps the name `360` until it
+is renamed on the host.
 
 ## Development
 

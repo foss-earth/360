@@ -5,7 +5,7 @@ const SETTINGS: LookSettings = {
   fovRangeDeg: { min: 35, max: 90 }, pitchRangeDeg: { min: -85, max: 85 }, reducedMotion: false,
 };
 
-describe("panorama look model", () => {
+describe("sphere look model", () => {
   it("looks left when the image is dragged right, and up when it is dragged down", () => {
     const model = createLookModel({ headingDeg: 10, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
     model.drag(100, 0, 16);

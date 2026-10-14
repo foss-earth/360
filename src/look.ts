@@ -1,4 +1,6 @@
-/** Retained panorama look model, ticked by the host frame only. */
+/** Retained sphere look model, ticked by the host frame only. */
+import type { TouchPair } from "./cameraTarget.js";
+import { anchorSphereCamera, sphereRay, type SpherePoint, type SpherePoseLimits, type SphereViewport } from "./sphereCamera.js";
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
 export interface LookState {
@@ -51,14 +53,16 @@ export interface LookModel {
   drag(dx: number, dy: number, dtMs: number): void;
   /** The drag ends, `stillMs` after its last move: a drag held still before the release has no glide. */
   release(stillMs?: number): void;
-  /** Wheel deltaY in CSS px; negative (wheel up) narrows. */
-  wheel(deltaPx: number): void;
+  /** Wheel deltaY in CSS px; negative (wheel up) narrows. `at` anchors the ray there. */
+  wheel(deltaPx: number, at?: SpherePoint | null): void;
   /** A trackpad swipe's scroll deltas, CSS px: it moves the image as a drag the other way does. */
   swipe(deltaX: number, deltaY: number): void;
-  /** Zooms by a pinch's scale change as a natural logarithm; positive (fingers apart) narrows. */
-  pinchBy(logScale: number): void;
+  /** Zooms by a pinch's scale change as a natural logarithm; positive (fingers apart) narrows. `at` anchors the ray there. */
+  pinchBy(logScale: number, at?: SpherePoint | null): void;
   /** Pinch from one finger separation to another. */
   pinch(fromPx: number, toPx: number): void;
+  /** Two touches moved: separation and midpoint motion are one anchored update when the view is measured. */
+  touchPinch(from: TouchPair, to: TouchPair): void;
   /** Held rates: look right/up and zoom in, each −1 to 1. */
   setRates(rates: { lookX: number; lookY: number; zoom: number }): void;
   /** Advances held rates and inertia; returns whether anything is still moving. */
@@ -67,8 +71,22 @@ export interface LookModel {
   cancelInertia(): void;
 }
 
-export function createLookModel(initial: LookState, settings: () => LookSettings, onChange: (state: LookState) => void): LookModel {
+export function createLookModel(initial: LookState, settings: () => LookSettings, onChange: (state: LookState) => void, viewport?: () => SphereViewport | null): LookModel {
   let state = clampLook(initial, settings());
+  const readViewport = (): SphereViewport | null => {
+    const view = viewport?.() ?? null;
+    return view && view.width > 0 && view.height > 0 ? view : null;
+  };
+  const limitsOf = (current: LookSettings): SpherePoseLimits => ({ fovDeg: current.fovRangeDeg, pitchDeg: current.pitchRangeDeg });
+  /** Zoom by `amount` on tan(fov/2). A measured view keeps the ray under `at` on the way to `to`. */
+  const anchored = (next: LookState, amount: number, at: SpherePoint | null, to: SpherePoint | null): LookState => {
+    const requested = zoomFov(next.verticalFovDeg, amount);
+    const view = readViewport();
+    if (!view) return { ...next, verticalFovDeg: requested };
+    const from = at ?? { x: view.width / 2, y: view.height / 2 };
+    const ray = sphereRay(next, view, from);
+    return anchorSphereCamera(next, view, ray, to ?? from, requested, limitsOf(settings()), from);
+  };
   let velocity = { heading: 0, pitch: 0 };
   let rates = { lookX: 0, lookY: 0, zoom: 0 };
   // While a drag holds the image, its speed is kept for the release, not applied.
@@ -96,8 +114,8 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
       const current = settings();
       if (current.reducedMotion || current.inertiaHalfLifeMs <= 0 || stillMs > GLIDE_RELEASE_WINDOW_MS) velocity = { heading: 0, pitch: 0 };
     },
-    wheel(deltaPx) {
-      apply({ ...state, verticalFovDeg: zoomFov(state.verticalFovDeg, (-deltaPx / WHEEL_NOTCH_PX) * settings().zoomPerNotch) });
+    wheel(deltaPx, at) {
+      apply(anchored(state, (-deltaPx / WHEEL_NOTCH_PX) * settings().zoomPerNotch, at ?? null, null));
     },
     swipe(deltaX, deltaY) {
       // The OS applies the scroll direction the person chose, and momentum after the fingers lift.
@@ -109,9 +127,13 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
       if (!(fromPx > 0 && toPx > 0)) return;
       this.pinchBy(Math.log(toPx / fromPx));
     },
-    pinchBy(logScale) {
+    touchPinch(from, to) {
+      if (!(from.separation > 0 && to.separation > 0)) return;
+      apply(anchored(state, Math.log(to.separation / from.separation) * settings().pinchGain, from.mid, to.mid));
+    },
+    pinchBy(logScale, at) {
       if (!Number.isFinite(logScale)) return;
-      apply({ ...state, verticalFovDeg: zoomFov(state.verticalFovDeg, logScale * settings().pinchGain) });
+      apply(anchored(state, logScale * settings().pinchGain, at ?? null, null));
     },
     setRates(next) {
       rates = next;
@@ -121,11 +143,11 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
       const current = settings();
       const dt = Math.max(0, Math.min(dtMs, 100)) / 1000;
       let next = state;
-      if (rates.lookX || rates.lookY || rates.zoom) {
+      if (rates.lookX || rates.lookY) {
         next = {
+          ...next,
           headingDeg: next.headingDeg + rates.lookX * current.lookRate * dt,
           pitchDeg: next.pitchDeg + rates.lookY * current.lookRate * dt,
-          verticalFovDeg: zoomFov(next.verticalFovDeg, rates.zoom * current.zoomRate * dt),
         };
       }
       if (!held && (velocity.heading || velocity.pitch)) {
@@ -138,6 +160,7 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
           if (Math.hypot(velocity.heading, velocity.pitch) < INERTIA_STOP_DEG_PER_S) velocity = { heading: 0, pitch: 0 };
         }
       }
+      if (rates.zoom) next = anchored(next, rates.zoom * current.zoomRate * dt, null, null);
       if (next !== state) apply(next);
       return this.moving();
     },

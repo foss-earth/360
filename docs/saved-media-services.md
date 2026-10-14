@@ -1,6 +1,6 @@
 # Saved-media service selection
 
-`@foss-earth/360/resources` exposes the optional port:
+`@foss-earth/image-viewer/resources` exposes the optional port:
 
 ```ts
 filesFor?(input: ViewerImageInput, representation: ImageRepresentation): ImageFileService;
@@ -19,7 +19,7 @@ transport/codec and current transfer policy supplied explicitly:
 ```ts
 import { mediaGroup } from "@foss-earth/images";
 import { createImageFileService, type ImageFileService } from "@foss-earth/images/browser";
-import type { ViewerResourceCompositionPorts } from "@foss-earth/360/resources";
+import type { ViewerResourceCompositionPorts } from "@foss-earth/image-viewer/resources";
 
 const services = new Map<string, ImageFileService>();
 const filesFor: NonNullable<ViewerResourceCompositionPorts["filesFor"]> =
