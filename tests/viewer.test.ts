@@ -192,6 +192,20 @@ describe("injected viewer lifecycle", () => {
     covered = true; await f.advance(5); expect(f.viewer.status().immersionDetail?.representation).toBe("tiles"); expect(whole.release).toHaveBeenCalledTimes(1);
     expect(tiles.settleReplacement).toHaveBeenCalledTimes(1); f.viewer.dispose(); expect(f.holds.active).toBe(0);
   });
+  it("turns an open sphere to face a heading and leaves a closed one alone", async () => {
+    const f = fixture(), handle = await f.viewer.prepare(image(), new AbortController().signal);
+    await handle.ready(); f.viewer.replaceImages([handle]);
+    expect(f.viewer.face({ headingDeg: 0 })).toBe(false);
+    expect(await f.viewer.enter("a")).toBe(true); await flush();
+    const fov = f.viewer.status().view?.verticalFovDeg;
+    expect(f.viewer.face({ headingDeg: 140, pitchDeg: 12 })).toBe(true);
+    expect(f.viewer.status().view).toMatchObject({ headingDeg: 140, pitchDeg: 12, verticalFovDeg: fov });
+    expect(f.viewer.face({ headingDeg: 0, pitchDeg: 0 })).toBe(true);
+    expect(f.viewer.status().view).toMatchObject({ headingDeg: 0, pitchDeg: 0, verticalFovDeg: fov });
+    f.viewer.exit(); await flush();
+    expect(f.viewer.face({ headingDeg: 0, pitchDeg: 0 })).toBe(false);
+    f.viewer.dispose();
+  });
   it("opens at the field of view the settings ask for within the zoom range, the map's when there is none, and the scene's own view as it is", async () => {
     const f = fixture(), controller = new AbortController();
     const handles = await Promise.all([image("a"), { ...image("b"), initialView: { headingDeg: 30, pitchDeg: 5, verticalFovDeg: 50 } }].map(input => f.viewer.prepare(input, controller.signal)));

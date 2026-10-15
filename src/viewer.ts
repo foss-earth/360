@@ -5,7 +5,7 @@
  */
 import { dot, length, scale, sub, type Vec3 } from "@foss-earth/images";
 import type { ImageRepresentation } from "@foss-earth/images";
-import { createLookModel, type LookModel, type LookSettings, type LookState } from "./look.js";
+import { clampLook, createLookModel, type LookModel, type LookSettings, type LookState } from "./look.js";
 import type { SphereViewport } from "./sphereCamera.js";
 import { flightIn, flightOut, flightMotion, poseView, type Flight, type FlightPose } from "./flight.js";
 import { expansionTargetRadius, handoffReady, orbGeometry } from "./math.js";
@@ -428,6 +428,18 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     catch { if (immersion === state && !state.leaving && state.roll !== 0) { state.roll = 0; state.look.set(state.look.get()); } }
     finally { if (arrival === controller) arrival = null; }
   }
+  function face(next: Partial<LookState>): boolean {
+    const state = immersion;
+    if (!state || state.leaving || phase !== "immersive" || state.lease.released || state.lease.signal.aborted) return false;
+    const current = state.look.get();
+    const view = clampLook({
+      headingDeg: next.headingDeg ?? current.headingDeg,
+      pitchDeg: next.pitchDeg ?? current.pitchDeg,
+      verticalFovDeg: next.verticalFovDeg ?? current.verticalFovDeg,
+    }, options.settings().look);
+    void arrive(state, { ...view, rollDeg: 0 }).catch(() => {});
+    return true;
+  }
   function awaitViewReady(source: ViewerSource, entry: Entry, signal: AbortSignal): Promise<void> {
     if (!source.viewReady) return Promise.resolve();
     return new Promise((resolve, reject) => {
@@ -702,7 +714,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
       for (const entry of entries.values()) { entry.visible = true; entry.orb.update({ visible: true }); if (renderer.available) void loadPreview(entry, 1).catch(() => {}); }
       options.requestRender(); emit();
     },
-    enter: (...args) => track(enter(...args)), exit, status, describeImage(id) { return entries.get(id)?.input ?? null; },
+    enter: (...args) => track(enter(...args)), exit, face, status, describeImage(id) { return entries.get(id)?.input ?? null; },
     isPlacementFrozen(id) {
       const entry = entries.get(id);
       return !!entry && entry.visible && live(entry) && entry.frozenPlacement !== null;

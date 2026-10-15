@@ -86,6 +86,11 @@ export interface ImageViewer {
   replaceImages(images: readonly PreparedViewerImage[]): void;
   enter(id: string, options?: { signal?: ViewerAbortSignal; view?: LookState }): Promise<boolean>;
   exit(): void;
+  /**
+   * Turns the open sphere. Heading 0 is geographic north and pitch 0 is level.
+   * Fields left out stay as they are. Returns false when no sphere is open.
+   */
+  face(view: Partial<LookState>): boolean;
   status(): ViewerStatus;
   describeImage?(id: string): ViewerImageInput | null;
   subscribe(listener: (status: ViewerStatus) => void): () => void;
