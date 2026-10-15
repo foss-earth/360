@@ -3,6 +3,17 @@ import type { ViewerSource } from "../src/viewer.js";
 import { deferred, fixture, flush, image, representation, source } from "./fixtures/viewer.js";
 
 describe("injected viewer lifecycle", () => {
+  it("hides a published image on the map without dropping it from the set", async () => {
+    const f = fixture();
+    const handle = await f.viewer.prepare(image("a"), new AbortController().signal);
+    await handle.ready();
+    f.viewer.replaceImages([handle]);
+    expect(f.orbs[0].state.visible).toBe(true);
+    f.viewer.setMapVisibility(["a"]);
+    expect(f.orbs[0].state.visible).toBe(false);
+    expect(await f.viewer.enter("a")).toBe(true);
+    f.viewer.dispose();
+  });
   it("moves a published image while a visit has frozen ordinary placement, and ghosts it", async () => {
     const f = fixture();
     const handle = await f.viewer.prepare(image("a"), new AbortController().signal);

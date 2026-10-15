@@ -186,6 +186,8 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
   let arrival: AbortController | null = null;
   let fading: { stop(): void } | null = null;
   let hovered: string | null = null;
+  const mapHidden = new Set<string>();
+  const onMap = (entry: Entry): boolean => entry.visible && !mapHidden.has(entry.input.id);
   let hoverRelease: (() => void) | null = null;
   let appearance = "";
   const listeners = new Set<(status: ViewerStatus) => void>();
@@ -704,6 +706,14 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
       };
       handles.set(handle, entry); if (external.aborted) { handle.dispose(); throw external.reason; } return handle;
     },
+    setMapVisibility(hiddenIds) {
+      if (disposed) return;
+      mapHidden.clear();
+      for (const id of hiddenIds) mapHidden.add(id);
+      if (hovered && mapHidden.has(hovered)) { hovered = null; hoverRelease?.(); hoverRelease = null; }
+      for (const entry of entries.values()) if (live(entry)) entry.orb.update({ visible: onMap(entry) });
+      options.requestRender(); emit();
+    },
     replaceImages(images) {
       if (disposed) throw new Error("The image viewer is disposed.");
       const next = new Map<string, Entry>();
@@ -711,7 +721,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
       // Validate everything before changing the previous published set.
       clearNavigation(); for (const entry of entries.values()) { entry.orb.setExpansion(null); entry.visible = false; entry.orb.update({ visible: false }); }
       entries = next;
-      for (const entry of entries.values()) { entry.visible = true; entry.orb.update({ visible: true }); if (renderer.available) void loadPreview(entry, 1).catch(() => {}); }
+      for (const entry of entries.values()) { entry.visible = true; entry.orb.update({ visible: onMap(entry) }); if (renderer.available) void loadPreview(entry, 1).catch(() => {}); }
       options.requestRender(); emit();
     },
     enter: (...args) => track(enter(...args)), exit, face, status, describeImage(id) { return entries.get(id)?.input ?? null; },
@@ -733,14 +743,14 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
       return { previewDetail: { representation: entry.preview!.representation.id, faceTexels: resources.faceTexels(entry.preview!.representation), limitation: entry.previewLimitation } };
     },
     subscribe(listener) { if (!disposed) { listeners.add(listener); listener(status()); } return () => { listeners.delete(listener); }; },
-    pick(x, y) { if (disposed || phase !== "overview") return []; const ids = new Map([...entries.values()].map(entry => [entry.drawId, entry.input.id])); return renderer.pick(x, y, options.isOccluded).flatMap(hit => ids.has(hit.id) ? [ids.get(hit.id)!] : []); },
-    hover(id) { const next = phase === "overview" && id && entries.has(id) ? id : null; if (next === hovered) return; hovered = next; if (!hoverRelease) hoverRelease = options.holdRendering(); options.requestRender(); emit(); },
+    pick(x, y) { if (disposed || phase !== "overview") return []; const ids = new Map([...entries.values()].filter(onMap).map(entry => [entry.drawId, entry.input.id])); return renderer.pick(x, y, options.isOccluded).flatMap(hit => ids.has(hit.id) ? [ids.get(hit.id)!] : []); },
+    hover(id) { const next = phase === "overview" && id && entries.has(id) && !mapHidden.has(id) ? id : null; if (next === hovered) return; hovered = next; if (!hoverRelease) hoverRelease = options.holdRendering(); options.requestRender(); emit(); },
     reposition, setImageOpacity,
     async activateAction(id) { const action = immersion?.entry.input.actions.find(item => item.id === id); return action ? await action.activate() : false; },
     onFrame(frame) {
       if (disposed) return false;
       if (immersion?.shown.isCurrent?.() === false) { clearNavigation(); emit(); }
-      for (const entry of entries.values()) if (entry.preview?.isCurrent?.() === false && !entry.loading) void loadPreview(entry, 1).catch(() => {});
+      for (const entry of entries.values()) if (onMap(entry) && entry.preview?.isCurrent?.() === false && !entry.loading) void loadPreview(entry, 1).catch(() => {});
       for (const tick of [...frames]) tick();
       const settings = options.settings();
       const nextAppearance = `${settings.appearance.previewFovDeg}/${settings.appearance.markerDiameterCssPx.min}/${settings.appearance.markerDiameterCssPx.max}/${settings.appearance.hitTargetDiameterCssPx}`;
@@ -765,7 +775,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
         }
       }
       if (camera && !immersion && phase === "overview") {
-        const candidates = [...entries.values()].map(entry => {
+        const candidates = [...entries.values()].filter(onMap).map(entry => {
           const marker = entry.input.placement.marker; const radius = entry.orb.effectiveRadius(camera);
           const rel = marker ? sub(marker, camera.eye) : null;
           const diameter = rel && radius !== null && renderer.project(rel, camera) ? radius * camera.viewportHeightCssPx / (Math.max(length(rel), radius) * Math.tan(camera.view.verticalFovRad / 2)) * options.devicePixelsPerCss() : null;

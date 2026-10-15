@@ -84,6 +84,11 @@ export interface ImageViewer {
   prepare(input: ViewerImageInput, signal: ViewerAbortSignal): Promise<PreparedViewerImage>;
   /** Atomic metadata publication. Drawing reveals only ready resources. */
   replaceImages(images: readonly PreparedViewerImage[]): void;
+  /**
+   * Hides these published images on the map. They stay published, so a host
+   * can still enter one whose map layer is off.
+   */
+  setMapVisibility(hiddenIds: readonly string[]): void;
   enter(id: string, options?: { signal?: ViewerAbortSignal; view?: LookState }): Promise<boolean>;
   exit(): void;
   /**
