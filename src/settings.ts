@@ -283,7 +283,7 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
     description: "How long the view keeps turning after a drag, as the time for its speed to halve; 0 stops at once.", reason: "A brief optional continuation.", source: INPUT,
   }),
   {
-    id: "scene.panorama.entryOrientation", label: "On entering", description: "Where you look after entering: level at your current heading, or where the scene suggests.",
+    id: "scene.panorama.entryOrientation", label: "On entering", description: "Where you look after entering: level at your current heading, or where the scene suggests. Opening view, below, can use a remembered or fixed look instead.",
     unit: "none", kind: "choice",
     choices: [
       { id: "level-current", label: "Level, same heading", description: "Keep the heading you came in with, then level the view." },
@@ -291,6 +291,32 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
     ],
     default: "level-current", defaultReason: "Keeps your bearing; a scene's view may be applied from the list.",
     home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
+  },
+  {
+    id: "scene.panorama.openingView", label: "Opening view", description: "Which way a photograph opens. On entering uses the choice above. Last view uses the most recent look from any photograph. Each photograph keeps its own. One position always opens at the heading and pitch below. The Scenes list has Look up, which stores that position at the top of Look up and down.",
+    unit: "none", kind: "choice",
+    choices: [
+      { id: "enter", label: "On entering", description: "Use the On entering choice." },
+      { id: "last", label: "Last view", description: "Open where you were last looking, in any photograph." },
+      { id: "image", label: "Each photograph", description: "Open where you were last looking in this photograph." },
+      { id: "fixed", label: "One position", description: "Always open at the heading and pitch below." },
+    ],
+    default: "enter", defaultReason: "Leaves today's arrival unchanged until a remembered or fixed view is chosen.",
+    home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: "src/app/openingView.ts",
+  },
+  {
+    id: "scene.panorama.openingHeading", label: "Opening heading", description: "The heading used when Opening view is One position. 0 looks the same way heading 0 does in a panorama.",
+    unit: "deg", kind: "number", bounds: () => ({ min: 0, max: 359.9 }), step: 0.1, scale: "linear",
+    default: 0, defaultReason: "The panorama's forward heading.",
+    home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: "src/app/openingView.ts",
+    visibleWhen: { id: "scene.panorama.openingView", value: "fixed" },
+  },
+  {
+    id: "scene.panorama.openingPitch", label: "Opening pitch", description: "The pitch used when Opening view is One position. Positive looks up, within Look up and down.",
+    unit: "deg", kind: "number", bounds: () => ({ min: -89.9, max: 89.9 }), step: 0.1, scale: "linear",
+    default: 0, defaultReason: "Level, until Look up stores the top of the pitch range.",
+    home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: "src/app/openingView.ts",
+    visibleWhen: { id: "scene.panorama.openingView", value: "fixed" },
   },
   {
     id: "scene.panorama.entryFov", label: "Field of view",
