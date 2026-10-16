@@ -3,6 +3,40 @@ import type { ViewerSource } from "../src/viewer.js";
 import { deferred, fixture, flush, image, representation, source } from "./fixtures/viewer.js";
 
 describe("injected viewer lifecycle", () => {
+  it("updates actions during a visit without reloading media and snapshots their metadata", async () => {
+    const f = fixture(), input = image("a"), activate = vi.fn(() => true);
+    const handle = await f.viewer.prepare(input, new AbortController().signal);
+    await handle.ready(); f.viewer.replaceImages([handle]); await f.viewer.enter("a");
+    const loads = f.acquire.mock.calls.length, listener = vi.fn(), off = f.viewer.subscribe(listener);
+    const action = { id: "link", label: "Next image", direction: { headingDeg: 90, pitchDeg: 0 }, activate };
+    f.viewer.updateActions!("a", [action]); action.direction.headingDeg = 180;
+    expect(f.viewer.describeImage("a")?.actions[0].direction?.headingDeg).toBe(90);
+    expect(await f.viewer.activateAction("link")).toBe(true); expect(activate).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalled(); expect(f.acquire).toHaveBeenCalledTimes(loads);
+    f.viewer.updateActions!("a", []); expect(await f.viewer.activateAction("link")).toBe(false);
+    expect(f.viewer.status().active).toBe("a"); off(); f.viewer.dispose();
+  });
+  it.each([0, 100])("keeps the incoming heading and pitch after entry and settling, with a %i ms flight", async flightDurationMs => {
+    const f = fixture();
+    const incoming = { headingDeg: 123, pitchDeg: -28, rollDeg: 0, verticalFovDeg: 60 };
+    f.options.poses.viewFromPresentation = () => incoming;
+    f.settings.flightDurationMs = flightDurationMs;
+    f.settings.orientDurationMs = 100;
+    const input = image("a");
+    input.placement.marker = [6378147, 0, 0];
+    const handle = await f.viewer.prepare(input, new AbortController().signal);
+    await handle.ready();
+    f.viewer.replaceImages([handle]);
+    const entering = f.viewer.enter("a");
+    await flush();
+    if (flightDurationMs) await f.advance(flightDurationMs);
+    expect(await entering).toBe(true);
+    expect(f.viewer.status().view).toMatchObject({ headingDeg: 123, pitchDeg: -28 });
+    await f.advance(200);
+    expect(f.viewer.status().view).toMatchObject({ headingDeg: 123, pitchDeg: -28 });
+    f.viewer.dispose();
+    expect(f.holds.active).toBe(0);
+  });
   it("hides a published image on the map without dropping it from the set", async () => {
     const f = fixture();
     const handle = await f.viewer.prepare(image("a"), new AbortController().signal);

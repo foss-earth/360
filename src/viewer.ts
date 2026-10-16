@@ -137,14 +137,17 @@ function immutable<T>(value: T): T {
   const freeze = (item: unknown): void => { if (!item || typeof item !== "object" || Object.isFrozen(item)) return; for (const next of Object.values(item)) freeze(next); Object.freeze(item); };
   freeze(copy); return copy;
 }
-function snapshotInput(input: ViewerImageInput): ViewerImageInput {
-  if (typeof input.id !== "string" || !input.id) throw new Error("A placed image requires a stable identity.");
+function snapshotActions(input: ViewerImageInput["actions"]): ViewerImageInput["actions"] {
   const ids = new Set<string>();
-  const actions = input.actions.map(action => {
+  return Object.freeze(input.map(action => {
     if (!action.id || ids.has(action.id) || typeof action.activate !== "function") throw new Error("Image actions require unique stable IDs and host callbacks.");
     ids.add(action.id);
     return Object.freeze({ id: action.id, label: action.label, ...(action.direction ? { direction: immutable(action.direction) } : {}), activate: action.activate });
-  });
+  }));
+}
+function snapshotInput(input: ViewerImageInput): ViewerImageInput {
+  if (typeof input.id !== "string" || !input.id) throw new Error("A placed image requires a stable identity.");
+  const actions = snapshotActions(input.actions);
   return Object.freeze({ ...input, asset: immutable(input.asset), pose: immutable(input.pose), placement: immutable(input.placement), credits: immutable(input.credits), ...(input.initialView ? { initialView: immutable(input.initialView) } : {}), ...(input.details ? { details: immutable(input.details) } : {}), actions: Object.freeze(actions) });
 }
 
@@ -360,7 +363,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     const range = options.settings().look.fovRangeDeg;
     const authored = explicit ?? (options.settings().entryOrientation === "authored" ? entry.input.initialView : undefined);
     const fov = authored?.verticalFovDeg ?? options.settings().entryFovDeg ?? incoming.verticalFovDeg;
-    return { ...(authored ?? { ...incoming, pitchDeg: 0 }), rollDeg: 0, verticalFovDeg: Math.min(range.max, Math.max(range.min, fov)) };
+    return { ...(authored ?? incoming), rollDeg: 0, verticalFovDeg: Math.min(range.max, Math.max(range.min, fov)) };
   }
   function handBack(lease: ViewerNavigationLease, flying: Flying, moving: boolean, press: ViewerHeldPress | null, touches: readonly ViewerHeldTouch[] | null = null): void {
     const { flight, marker, t } = flying; const s = smooth(t); const current = flight.pose(s);
@@ -746,6 +749,12 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     pick(x, y) { if (disposed || phase !== "overview") return []; const ids = new Map([...entries.values()].filter(onMap).map(entry => [entry.drawId, entry.input.id])); return renderer.pick(x, y, options.isOccluded).flatMap(hit => ids.has(hit.id) ? [ids.get(hit.id)!] : []); },
     hover(id) { const next = phase === "overview" && id && entries.has(id) && !mapHidden.has(id) ? id : null; if (next === hovered) return; hovered = next; if (!hoverRelease) hoverRelease = options.holdRendering(); options.requestRender(); emit(); },
     reposition, setImageOpacity,
+    updateActions(id, actions) {
+      const entry = entries.get(id);
+      if (disposed || !entry || !live(entry)) return;
+      entry.input = { ...entry.input, actions: snapshotActions(actions) };
+      emit(); options.requestRender();
+    },
     async activateAction(id) { const action = immersion?.entry.input.actions.find(item => item.id === id); return action ? await action.activate() : false; },
     onFrame(frame) {
       if (disposed) return false;

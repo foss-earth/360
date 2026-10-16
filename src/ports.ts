@@ -109,6 +109,8 @@ export interface ImageViewer {
   /** Ghosts one published image. Null restores every image to solid. */
   setImageOpacity(id: string | null, opacity: number): void;
   activateAction(id: string): Promise<boolean>;
+  /** Replaces navigation actions without reloading the photograph or its media. */
+  updateActions?(id: string, actions: ViewerImageInput["actions"]): void;
   /** Same host clock/frame used by renderer and navigation. */
   onFrame(frame: { now: number; dtMs: number }): boolean;
   dispose(): void;

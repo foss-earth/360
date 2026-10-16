@@ -283,17 +283,17 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
     description: "How long the view keeps turning after a drag, as the time for its speed to halve; 0 stops at once.", reason: "A brief optional continuation.", source: INPUT,
   }),
   {
-    id: "scene.panorama.entryOrientation", label: "On entering", description: "Where you look after entering: level at your current heading, or where the scene suggests. Opening view, below, can use a remembered or fixed look instead.",
+    id: "scene.panorama.entryOrientation", label: "On entering", description: "Where you look after entering: keep the heading and pitch you flew in with, or use the scene's suggested view. Opening view, below, can use a remembered or fixed look when moving between photographs.",
     unit: "none", kind: "choice",
     choices: [
-      { id: "level-current", label: "Level, same heading", description: "Keep the heading you came in with, then level the view." },
+      { id: "level-current", label: "Incoming direction", description: "Keep both the heading and pitch you came in with." },
       { id: "authored", label: "The scene's view", description: "Turn to the panorama's suggested view." },
     ],
     default: "level-current", defaultReason: "Keeps your bearing; a scene's view may be applied from the list.",
     home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
   },
   {
-    id: "scene.panorama.openingView", label: "Opening view", description: "Which way a photograph opens. On entering uses the choice above. Last view uses the most recent look from any photograph. Each photograph keeps its own. One position always opens at the heading and pitch below. The Scenes list has Look up, which stores that position at the top of Look up and down.",
+    id: "scene.panorama.openingView", label: "Opening view", description: "The view used by thumbnails and when moving between photographs. On entering uses the choice above. Last view uses the most recent look from any photograph. Each photograph keeps its own. One position uses the heading and pitch below. The Scenes list has Look up, which stores that position at the top of Look up and down. Entering from the map keeps the incoming direction ahead of these preferences.",
     unit: "none", kind: "choice",
     choices: [
       { id: "enter", label: "On entering", description: "Use the On entering choice." },
