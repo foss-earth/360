@@ -42,12 +42,12 @@ export interface ImageCameraTarget {
   release(stillMs?: number): void;
   /** Wheel deltaY in CSS px at a point; negative (wheel up) magnifies. */
   wheel(deltaPx: number, at?: SurfacePoint | null): void;
-  /** Scroll deltas in the person's chosen direction. Continuing swipes keep the image point where the gesture began. */
-  swipe(deltaX: number, deltaY: number, at?: SurfacePoint | null, continuing?: boolean): void;
+  /** A trackpad swipe's scroll deltas, CSS px, already in the direction the person chose. */
+  swipe(deltaX: number, deltaY: number): void;
   /** A pinch's scale change as a natural logarithm at a point; positive (fingers apart) magnifies. */
   pinchBy(logScale: number, at?: SurfacePoint | null): void;
   /** Two touches moved: separation and midpoint motion in one update. */
-  touchPinch(from: TouchPair, to: TouchPair): void;
+  touchPinch(from: TouchPair, to: TouchPair, dtMs?: number): void;
   /** Held rates: look right/up and zoom in, each −1 to 1. */
   setRates(rates: { lookX: number; lookY: number; zoom: number }): void;
   /** Advances held rates and any glide; returns whether anything is still moving. */
@@ -140,9 +140,9 @@ export interface SphereCameraTargetPorts {
 }
 
 /**
- * The sphere camera as an input target. Drag, swipe, zoom and pinch keep the
- * common-space ray under the gesture using the measured view. Held rates
- * change the live look's heading and pitch.
+ * The sphere camera as an input target. Drag, zoom and pinch keep the
+ * common-space ray under the gesture using the measured view. Swipe and held
+ * rates change the live look's heading and pitch.
  */
 export function createSphereCameraTarget(ports: SphereCameraTargetPorts): ImageCameraTarget {
   let model: LookModel | null = null;
@@ -168,9 +168,9 @@ export function createSphereCameraTarget(ports: SphereCameraTargetPorts): ImageC
     drag(dx, dy, dt, from) { ensure()?.drag(dx, dy, dt, from); },
     release(still) { model?.release(still); },
     wheel(delta, at) { ensure()?.wheel(delta, at); },
-    swipe(dx, dy, at, continuing) { ensure()?.swipe(dx, dy, at, continuing); },
+    swipe(dx, dy) { ensure()?.swipe(dx, dy); },
     pinchBy(log, at) { ensure()?.pinchBy(log, at); },
-    touchPinch(from, to) { ensure()?.touchPinch(from, to); },
+    touchPinch(from, to, dt) { ensure()?.touchPinch(from, to, dt); },
     setRates(rates) { ensure()?.setRates(rates); },
     step(dt) { return ensure()?.step(dt) ?? false; },
     moving: () => model?.moving() ?? false,

@@ -185,8 +185,6 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     precedingWheelMs: options.precedingWheelMs,
   });
   let gestureScale = 1;
-  /** A trackpad pan holds its first image point through the stream, including OS momentum. */
-  let lastSwipeMs = -Infinity;
   let attached = true;
   let markers: ImageAnchorMarkers | null = null;
   let markerTimer: number | null = null;
@@ -206,12 +204,11 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
       return;
     }
     const anchor = markersSuppressed ? null : model.anchor();
-    const visible = anchor && (pointers.size > 0 || pinching || model.moving() || transientAnchor) ? anchor : null;
+    const visible = anchor && (pointers.size > 0 || pinching || (anchor.grab && model.moving()) || transientAnchor) ? anchor : null;
     if (visible) markers ??= display.create(canvas);
     markers?.show(visible);
   };
   const beginContactMarkers = (): void => {
-    lastSwipeMs = -Infinity;
     markersSuppressed = false;
     transientAnchor = false;
     clearMarkerTimer();
@@ -228,7 +225,6 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     }, WHEEL_IDLE_MS);
   };
   const hideMarkers = (): void => {
-    lastSwipeMs = -Infinity;
     markersSuppressed = true;
     transientAnchor = false;
     clearMarkerTimer();
@@ -268,13 +264,13 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     pinchFrom = pair ? pairOf(pair[0], pair[1]) : null;
     pinching = pinchFrom !== null;
   };
-  const applyPinch = (): void => {
+  const applyPinch = (dtMs?: number): void => {
     const pair = firstTwo();
     if (!pair) { pinchFrom = null; pinching = false; return; }
     const now = pairOf(pair[0], pair[1]);
     if (pinchFrom && pinchFrom.separation > 0 && now.separation > 0) {
       beginContactMarkers();
-      model.touchPinch(pinchFrom, now);
+      model.touchPinch(pinchFrom, now, dtMs);
       refreshUnsubscribedMarkers();
     }
     pinchFrom = now;
@@ -315,7 +311,7 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (!last) return;
     const current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
     pointers.set(event.pointerId, current);
-    if (pointers.size + outside.size >= 2) applyPinch();
+    if (pointers.size + outside.size >= 2) applyPinch(current.at - last.at);
     else {
       const from = local(last.x, last.y), to = local(current.x, current.y);
       beginContactMarkers();
@@ -350,12 +346,13 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   const onForeignMove = (event: PointerEvent): void => {
     const last = outside.get(event.pointerId);
     if (!last) return;
+    const dtMs = event.timeStamp - last.at;
     outside.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
     hover = { x: event.clientX, y: event.clientY };
     if (pointers.size + outside.size < 2) return;
     event.preventDefault();
     event.stopPropagation();
-    applyPinch();
+    applyPinch(dtMs);
   };
   const onForeignUp = (event: PointerEvent): void => {
     const last = outside.get(event.pointerId);
@@ -372,19 +369,16 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
     const gesture = classifyWheel(event);
-    if (gesture === "ignore") { lastSwipeMs = -Infinity; return; }
+    if (gesture === "ignore") return;
     options.onUserInput();
     const scale = event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? WHEEL_NOTCH_PX * 3 : 1;
-    const at = local(event.clientX, event.clientY);
-    beginTransientMarkers();
     // A swipe, or shift+wheel, looks around: what pans or orbits the globe.
     if (gesture === "pan" || gesture === "orbit") {
-      const now = window.performance.now();
-      const continuing = now - lastSwipeMs < WHEEL_IDLE_MS;
-      lastSwipeMs = now;
-      model.swipe(event.deltaX * scale, event.deltaY * scale, at, continuing);
+      hideMarkers();
+      model.swipe(event.deltaX * scale, event.deltaY * scale);
     } else {
-      lastSwipeMs = -Infinity;
+      const at = local(event.clientX, event.clientY);
+      beginTransientMarkers();
       if (gesture === "pinchZoom") model.pinchBy((-event.deltaY * scale) / PINCH_WHEEL_PX_PER_LOG_SCALE, at);
       else model.wheel(event.deltaY * scale, at);
     }
@@ -400,12 +394,10 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   // Safari's trackpad pinch: `scale` is relative to the gesture's start.
   const onGestureStart = (event: Event): void => {
     event.preventDefault();
-    lastSwipeMs = -Infinity;
     gestureScale = 1;
   };
   const onGestureChange = (event: Event): void => {
     event.preventDefault();
-    lastSwipeMs = -Infinity;
     const next = (event as Event & { scale?: number }).scale;
     if (typeof next !== "number" || !(next > 0)) return;
     options.onUserInput();

@@ -90,10 +90,11 @@ The generic Renderer owns that section and its `all` and `presentationCandidates
 
 `./input` takes explicit window, control-key and wheel-classifier ports. Detached handlers do nothing.
 
-Measured panorama drags, touch pinches and trackpad pans hold the image point
-where the gesture began. **Looking → Show anchors** shows map-style markers,
-off by default. See [panorama gestures and visible anchors](docs/gesture-anchors.md)
-for the FOV limits, gesture lifetime, viewport units and regression coverage.
+Measured panorama drags, touch pinches and zooms hold the image point where the
+gesture began, while trackpad swipes turn heading and pitch directly. **Looking →
+Show anchors** shows map-style markers, off by default. See [panorama gestures
+and visible anchors](docs/gesture-anchors.md) for the FOV limits, gesture
+lifetime, viewport units and regression coverage.
 
 ## Sphere preparation
 

@@ -48,11 +48,11 @@ are local CSS pixels in the measured surface; the helper converts them to client
 pixels and hides points outside that surface. The same factory works inside a
 preview iframe using its own document.
 
-A trackpad pan keeps the sphere point where the gesture began through the
-scroll stream and its operating-system momentum. Cursor movement does not
-choose a new point until a fresh gesture begins after the idle gap.
-The [gesture guide](gesture-anchors.md) records the camera invariants, timing,
-viewport units and regression coverage.
+A two-finger trackpad swipe turns heading and pitch directly by its scroll
+deltas scaled by `swipeSensitivity` and $\tan(\text{fov}/2)$, gliding with the
+look model's inertia regardless of cursor position, and shows no
+anchor marker. The [gesture guide](gesture-anchors.md) records the camera
+invariants, timing, viewport units and regression coverage.
 
 `createImageViewer` in `@foss-earth/sphere-image/viewer` returns additive
 `SettledPublishedImageViewer`, with `whenSettled(): Promise<void>`; it accepts a

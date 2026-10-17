@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createSphereCameraTarget } from "../src/cameraTarget.js";
-import { createLookModel, zoomFov, type LookSettings } from "../src/look.js";
+import { createLookModel, swipeFovScale, zoomFov, type LookSettings } from "../src/look.js";
 import { projectSphereRay, sphereRay, type SphereCamera } from "../src/sphereCamera.js";
 
 const settings: LookSettings = {
@@ -9,6 +9,10 @@ const settings: LookSettings = {
 };
 const viewport = { width: 800, height: 600 };
 const start: SphereCamera = { headingDeg: 30, pitchDeg: 8, verticalFovDeg: 70 };
+const FRAME_MS = 1000 / 60;
+const settle = (model: { moving(): boolean; step(dtMs: number): boolean }) => {
+  for (let i = 0; i < 600 && model.moving(); i++) model.step(FRAME_MS);
+};
 
 function errorAt(camera: SphereCamera, ray: readonly [number, number, number], point: { x: number; y: number }): number {
   const projected = projectSphereRay(camera, viewport, ray);
@@ -117,67 +121,64 @@ describe("shared sphere look", () => {
     expect(model.get().pitchDeg).toBeLessThan(settings.pitchRangeDeg.max);
   });
 
-  it.each([10, 70, 140, 150])("anchors a trackpad pan at the pointer at %s degrees FOV", verticalFovDeg => {
-    const initial = { ...start, verticalFovDeg };
+  it("turns heading and pitch by swipeSensitivity scaled with FOV, glides with map-style inertia, and clamps cleanly at the poles", () => {
+    const initial = { headingDeg: 42, pitchDeg: 80, verticalFovDeg: 70 };
     const inertia = { ...settings, inertiaHalfLifeMs: 100, reducedMotion: false };
     const model = createLookModel(initial, () => inertia, () => {}, () => viewport);
-    const at = { x: 580, y: 250 };
-    const ray = sphereRay(initial, viewport, at);
-    model.swipe(26, -14, at);
-    const to = { x: at.x - 26, y: at.y + 14 };
-    expect(errorAt(model.get(), ray, to)).toBeLessThan(0.25);
-    expect(model.get().verticalFovDeg).toBe(verticalFovDeg);
-    expect(model.step(100)).toBe(false);
-    expect(errorAt(model.get(), ray, to)).toBeLessThan(0.25);
+    const scale = swipeFovScale(70);
+    model.drag(10, 0, 16, { x: 400, y: 300 });
+    expect(model.anchor()).not.toBeNull();
+
+    const beforeSwipe = model.get();
+    model.swipe(26, -14);
+    expect(model.anchor()).toBeNull();
+    expect(model.moving()).toBe(true);
+    expect(model.get().headingDeg).toBeGreaterThan(beforeSwipe.headingDeg);
+    expect(model.get().headingDeg).toBeLessThan(beforeSwipe.headingDeg + 2.6 * scale);
+    settle(model);
+    expect(model.get().headingDeg).toBeCloseTo(beforeSwipe.headingDeg + 2.6 * scale, 2);
+    expect(model.get().pitchDeg).toBeCloseTo(beforeSwipe.pitchDeg + 1.4 * scale, 2);
+    expect(model.get().verticalFovDeg).toBe(70);
+    expect(model.anchor()).toBeNull();
+
+    // Long swipes into and along the pole clamp pitch and keep turning heading freely.
+    for (let step = 0; step < 30; step++) {
+      model.swipe(50, -50);
+      model.step(FRAME_MS);
+    }
+    settle(model);
+    expect(model.get().pitchDeg).toBe(settings.pitchRangeDeg.max);
+    expect(model.get().headingDeg).toBeCloseTo((beforeSwipe.headingDeg + 2.6 * scale + 30 * 5 * scale) % 360, 1);
+    expect(model.anchor()).toBeNull();
+
+    // Swiping back down leaves the pole immediately without unwinding excess travel.
+    model.swipe(0, 50);
+    expect(model.get().pitchDeg).toBeLessThan(settings.pitchRangeDeg.max);
+    settle(model);
+    expect(model.get().pitchDeg).toBeCloseTo(settings.pitchRangeDeg.max - 5 * scale, 2);
   });
 
-  it("anchors an unspecified trackpad pan point at the measured view's centre", () => {
-    const initial = { ...start, verticalFovDeg: 10 };
-    const model = createLookModel(initial, () => settings, () => {}, () => viewport);
-    const ray = sphereRay(initial, viewport, { x: 400, y: 300 });
-    model.swipe(32, -18);
-    expect(errorAt(model.get(), ray, { x: 368, y: 318 })).toBeLessThan(0.25);
-  });
-
-  it.each([10, 70, 140, 150])("keeps a continuing swipe on its original sphere point at %s degrees FOV", verticalFovDeg => {
-    const initial = { ...start, verticalFovDeg };
-    const model = createLookModel(initial, () => settings, () => {}, () => viewport);
-    const origin = { x: 580, y: 250 };
-    const ray = sphereRay(initial, viewport, origin);
-    model.swipe(26, -14, origin);
-    model.swipe(30, 12, { x: 150, y: 450 }, true);
-    expect(errorAt(model.get(), ray, { x: 524, y: 252 })).toBeLessThan(0.25);
-    expect(model.get().verticalFovDeg).toBe(verticalFovDeg);
-    expect(model.anchor()).toMatchObject({ x: expect.closeTo(524, 5), y: expect.closeTo(252, 5) });
-  });
-
-  it("retains a centre swipe through a pitch limit and back despite cursor movement", () => {
-    const initial = { headingDeg: 42, pitchDeg: 80, verticalFovDeg: 70 };
-    const model = createLookModel(initial, () => settings, () => {}, () => viewport);
-    const ray = sphereRay(initial, viewport, { x: 400, y: 300 });
-    model.swipe(0, -600);
-    expect(model.get().pitchDeg).toBeCloseTo(settings.pitchRangeDeg.max, 5);
-    model.swipe(0, -100, { x: 100, y: 100 }, true);
-    expect(model.get().pitchDeg).toBeCloseTo(settings.pitchRangeDeg.max, 5);
-    model.swipe(0, 700, null, true);
-    expect(errorAt(model.get(), ray, { x: 400, y: 300 })).toBeLessThan(0.25);
-    expect(model.get().pitchDeg).toBeCloseTo(initial.pitchDeg, 5);
-    expect(model.get().headingDeg).toBeCloseTo(initial.headingDeg, 5);
-  });
-
-  it("keeps a centre wheel on the old field of view, and an off-centre wheel on the ray under the pointer", () => {
+  it("keeps a centre wheel on the old field of view, and an off-centre wheel on the ray under the pointer through inertia", () => {
     let state = start;
-    const model = createLookModel(start, () => settings, next => { state = next; }, () => viewport);
+    const inertia = { ...settings, inertiaHalfLifeMs: 100, reducedMotion: false };
+    const model = createLookModel(start, () => inertia, next => { state = next; }, () => viewport);
     model.wheel(-100, { x: 400, y: 300 });
+    expect(model.moving()).toBe(true);
+    settle(model);
     expect(state.headingDeg).toBeCloseTo(start.headingDeg, 6);
     expect(state.pitchDeg).toBeCloseTo(start.pitchDeg, 6);
-    expect(state.verticalFovDeg).toBeCloseTo(zoomFov(70, settings.zoomPerNotch), 6);
+    expect(state.verticalFovDeg).toBeCloseTo(zoomFov(70, settings.zoomPerNotch), 2);
 
+    const beforeOffCentre = state;
     const at = { x: 620, y: 180 };
-    const ray = sphereRay(state, viewport, at);
+    const ray = sphereRay(beforeOffCentre, viewport, at);
     model.wheel(-100, at);
     expect(errorAt(state, ray, at)).toBeLessThan(0.25);
-    expect(state.verticalFovDeg).toBeLessThan(70);
+    expect(model.moving()).toBe(true);
+    while (model.step(FRAME_MS)) {
+      expect(errorAt(state, ray, at)).toBeLessThan(0.25);
+    }
+    expect(state.verticalFovDeg).toBeCloseTo(zoomFov(beforeOffCentre.verticalFovDeg, settings.zoomPerNotch), 2);
   });
 
   it("moves a two-finger pinch's midpoint and separation as one update", () => {
@@ -214,9 +215,10 @@ describe("shared sphere look", () => {
     model.wheel(-100, { x: 10, y: 10 });
     expect(state.headingDeg).toBeCloseTo(start.headingDeg - 15, 6);
     expect(state.verticalFovDeg).toBeCloseTo(zoomFov(70, settings.zoomPerNotch), 6);
-    model.swipe(10, -20, { x: 10, y: 10 });
-    expect(state.headingDeg).toBeCloseTo(start.headingDeg - 14, 6);
-    expect(state.pitchDeg).toBeCloseTo(start.pitchDeg + 2, 6);
+    const scale = swipeFovScale(state.verticalFovDeg);
+    model.swipe(10, -20);
+    expect(state.headingDeg).toBeCloseTo(start.headingDeg - 15 + 1 * scale, 6);
+    expect(state.pitchDeg).toBeCloseTo(start.pitchDeg + 2 * scale, 6);
   });
 
   it("uses the same solver for a tab camera, including a measured view", () => {
@@ -237,9 +239,11 @@ describe("shared sphere look", () => {
     target.drag(18, 20, 16, from);
     expect(errorAt(camera!, draggedRay, { x: 578, y: 280 })).toBeLessThan(0.25);
     target.release();
-    const swipeAt = { x: 620, y: 360 };
-    const swipedRay = sphereRay(camera!, viewport, swipeAt);
-    target.swipe(16, -12, swipeAt);
-    expect(errorAt(camera!, swipedRay, { x: 604, y: 372 })).toBeLessThan(0.25);
+    const beforeSwipe = camera!;
+    const scale = swipeFovScale(beforeSwipe.verticalFovDeg);
+    target.swipe(16, -12);
+    expect(camera!.headingDeg).toBeCloseTo(beforeSwipe.headingDeg + 1.6 * scale, 6);
+    expect(camera!.pitchDeg).toBeCloseTo(beforeSwipe.pitchDeg + 1.2 * scale, 6);
+    expect(target.anchor?.()).toBeNull();
   });
 });

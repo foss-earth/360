@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createLookModel, zoomFov, type LookSettings } from "../src/look.js";
+import { createLookModel, swipeFovScale, zoomFov, type LookSettings } from "../src/look.js";
 const SETTINGS: LookSettings = {
   dragSensitivity: 0.15, swipeSensitivity: 0.1, lookRate: 90, zoomPerNotch: 0.1, zoomRate: 0.5, pinchGain: 1, inertiaHalfLifeMs: 100,
   fovRangeDeg: { min: 35, max: 90 }, pitchRangeDeg: { min: -85, max: 85 }, reducedMotion: false,
+};
+const FRAME_MS = 1000 / 60;
+const settle = (model: ReturnType<typeof createLookModel>) => {
+  for (let i = 0; i < 600 && model.moving(); i++) model.step(FRAME_MS);
 };
 
 describe("sphere look model", () => {
@@ -14,25 +18,48 @@ describe("sphere look model", () => {
     expect(model.get().pitchDeg).toBeCloseTo(15);
   });
 
-  it("narrows the view for wheel up and pinch out, on tan(fov/2), within its range", () => {
+  it("narrows the view for wheel up and pinch out, on tan(fov/2), gliding with inertia within its range", () => {
     const model = createLookModel({ headingDeg: 0, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
     model.wheel(-100);
-    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1));
     expect(model.get().verticalFovDeg).toBeLessThan(60);
+    expect(model.get().verticalFovDeg).toBeGreaterThan(zoomFov(60, 0.1));
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1), 2);
+    expect(model.moving()).toBe(false);
     model.pinch(100, 200);
+    settle(model);
     expect(model.get().verticalFovDeg).toBe(35);
+    expect(model.moving()).toBe(false);
     for (let i = 0; i < 100; i++) model.wheel(100);
+    settle(model);
     expect(model.get().verticalFovDeg).toBe(90);
+    expect(model.moving()).toBe(false);
   });
 
-  it("moves the image with a swipe as a drag does: scrolling right looks right, scrolling down looks down", () => {
+  it("moves the image with a swipe scaled by tan(fov/2) and glides with map-style inertia", () => {
     const model = createLookModel({ headingDeg: 10, pitchDeg: 0, verticalFovDeg: 60 }, () => SETTINGS, () => {});
+    const scale = swipeFovScale(60);
     model.swipe(100, 0);
-    expect(model.get().headingDeg).toBeCloseTo(20);
+    expect(model.get().headingDeg).toBeGreaterThan(10);
+    expect(model.get().headingDeg).toBeLessThan(10 + 10 * scale);
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().headingDeg).toBeCloseTo(10 + 10 * scale, 2);
     model.swipe(0, 100);
-    expect(model.get().pitchDeg).toBeCloseTo(-10);
-    // The OS adds momentum after the fingers lift; the model adds none.
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().pitchDeg).toBeCloseTo(-10 * scale, 2);
     expect(model.moving()).toBe(false);
+
+    // At 90° FOV the scale is 1; zoomed in to 35° FOV a swipe turns much less per pixel.
+    const wide = createLookModel({ headingDeg: 0, pitchDeg: 0, verticalFovDeg: 90 }, () => ({ ...SETTINGS, inertiaHalfLifeMs: 0 }), () => {});
+    const narrow = createLookModel({ headingDeg: 0, pitchDeg: 0, verticalFovDeg: 35 }, () => ({ ...SETTINGS, inertiaHalfLifeMs: 0 }), () => {});
+    wide.swipe(100, 0);
+    narrow.swipe(100, 0);
+    expect(wide.get().headingDeg).toBeCloseTo(10, 6);
+    expect(narrow.get().headingDeg).toBeCloseTo(10 * swipeFovScale(35), 6);
+    expect(narrow.get().headingDeg).toBeLessThan(wide.get().headingDeg * 0.35);
   });
 
   it("clamps pitch to its range and keeps heading in [0, 360)", () => {

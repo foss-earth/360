@@ -48,12 +48,14 @@ describe("image camera anchor readings", () => {
     expect(model.anchor()).toBeNull();
   });
 
-  it("distinguishes a trackpad grab from a wheel zoom", () => {
+  it("clears any anchor on a trackpad swipe and shows a zoom anchor on a wheel zoom", () => {
     const model = createLookModel(initial, () => settings, () => {}, () => viewport);
     const at = { x: 550, y: 260 };
-    model.swipe(20, -12, at);
-    expectPoint(model.anchor(), { x: 530, y: 272 });
+    model.drag(10, -5, 16, at);
     expect(model.anchor()).toMatchObject({ grab: true, zoom: false, held: true });
+
+    model.swipe(20, -12);
+    expect(model.anchor()).toBeNull();
 
     model.wheel(-100, at);
     expectPoint(model.anchor(), at);
@@ -100,7 +102,7 @@ describe("image camera anchor readings", () => {
 
     measured = null;
     if (gesture === "drag") model.drag(12, 5, 16, at);
-    else if (gesture === "swipe") model.swipe(12, 5, at);
+    else if (gesture === "swipe") model.swipe(12, 5);
     else model.wheel(-100, at);
     expect(model.anchor()).toBeNull();
     measured = viewport;

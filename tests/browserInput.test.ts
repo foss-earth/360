@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { attachLookInput } from "../src/browserInput.js";
-import { createLookModel, zoomFov, type LookSettings } from "../src/index.js";
+import { createLookModel, swipeFovScale, zoomFov, type LookSettings } from "../src/index.js";
 import { projectSphereRay, sphereRay, type SpherePoint } from "../src/sphereCamera.js";
 import { controlTakesKey } from "@felipegalind0/gamepad-tools/browser";
 import { createWheelGestureClassifier as createEngineWheelGestureClassifier } from "@foss-earth/engine/core";
@@ -11,6 +11,10 @@ const createWheelGestureClassifier: Parameters<typeof attachLookInput>[0]["creat
 const SETTINGS: LookSettings = {
   dragSensitivity: 0.15, swipeSensitivity: 0.1, lookRate: 90, zoomPerNotch: 0.1, zoomRate: 0.5, pinchGain: 1, inertiaHalfLifeMs: 100,
   fovRangeDeg: { min: 35, max: 90 }, pitchRangeDeg: { min: -85, max: 85 }, reducedMotion: false,
+};
+const FRAME_MS = 1000 / 60;
+const settle = (model: ReturnType<typeof createLookModel>) => {
+  for (let i = 0; i < 600 && model.moving(); i++) model.step(FRAME_MS);
 };
 
 describe("sphere look input", () => {
@@ -76,23 +80,30 @@ describe("sphere wheel input", () => {
   it("in trackpad mode looks around with a two-finger swipe, and zooms with a pinch", () => {
     vi.spyOn(performance, "now").mockReturnValue(1_000);
     const { canvas, model, input } = attach("trackpad");
+    const scale = swipeFovScale(60);
     canvas.dispatchEvent(wheel({ deltaX: 30, deltaY: -20 }));
-    expect(model.get().headingDeg).toBeCloseTo(93);
-    expect(model.get().pitchDeg).toBeCloseTo(2);
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().headingDeg).toBeCloseTo(90 + 3 * scale, 2);
+    expect(model.get().pitchDeg).toBeCloseTo(2 * scale, 2);
     expect(model.get().verticalFovDeg).toBe(60);
     // A pause ends the swipe; the pinch that follows is its own gesture.
     vi.spyOn(performance, "now").mockReturnValue(2_000);
     canvas.dispatchEvent(wheel({ deltaY: -10, ctrlKey: true }));
-    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1));
-    expect(model.get().headingDeg).toBeCloseTo(93);
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1), 2);
+    expect(model.get().headingDeg).toBeCloseTo(90 + 3 * scale, 2);
     input.detach();
     vi.restoreAllMocks();
   });
 
-  it("in mouse mode zooms with the wheel, as before", () => {
+  it("in mouse mode zooms with the wheel, gliding to the target FOV", () => {
     const { canvas, model, input } = attach("mouse");
     canvas.dispatchEvent(wheel({ deltaY: -100 }));
-    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1));
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1), 2);
     expect(model.get().headingDeg).toBe(90);
     input.detach();
   });
@@ -143,18 +154,20 @@ describe("measured sphere pan input", () => {
     input.detach();
   });
 
-  it("passes a trackpad pan's surface-local pointer and leaves momentum to the OS", () => {
+  it("turns heading and pitch on a trackpad pan regardless of pointer position, scaled with FOV and gliding with inertia", () => {
     const { canvas, model, input } = attach();
-    const at = { x: 580, y: 250 };
-    const ray = sphereRay(model.get(), viewport, at);
+    const scale = swipeFovScale(10);
     canvas.dispatchEvent(new WheelEvent("wheel", {
       bubbles: true, cancelable: true, deltaX: 26, deltaY: -14,
-      clientX: at.x + offset.x, clientY: at.y + offset.y,
+      clientX: -500, clientY: 9_000,
     }));
-    const to = { x: at.x - 26, y: at.y + 14 };
-    expectRayAt(model, ray, to);
-    expect(model.step(100)).toBe(false);
-    expectRayAt(model, ray, to);
+    expect(model.anchor()).toBeNull();
+    expect(model.moving()).toBe(true);
+    settle(model);
+    expect(model.get().headingDeg).toBeCloseTo(0.1 + 2.6 * scale, 2);
+    expect(model.get().pitchDeg).toBeCloseTo(8 + 1.4 * scale, 2);
+    expect(model.anchor()).toBeNull();
+    expect(model.moving()).toBe(false);
     input.detach();
   });
 

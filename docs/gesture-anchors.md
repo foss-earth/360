@@ -1,6 +1,8 @@
 # Panorama gestures and visible anchors
 
-The full panorama and interactive scene previews use the same look model.
+The full panorama and interactive scene previews use the same look model,
+following the shared [Physical UX](https://github.com/foss-earth/docs/blob/main/docs/physical-ux.md)
+principles across the globe and 360 spheres.
 Measured pointer gestures move the image one CSS pixel per input pixel at any
 zoom. Applying a fixed number of degrees per pixel makes a zoomed-in image move
 much faster than the finger; use the sphere camera geometry instead.
@@ -15,7 +17,8 @@ These controls live in **360 image settings → Looking** unless noted otherwise
 | `scene.panorama.entryFov` | Default 100°, bounded to 10–150° and the selected zoom range; under Entering. |
 | `scene.panorama.showAnchors` | Show anchors, off by default; independent of the map's `input.showNavigationAnchors`. |
 | `scene.panorama.dragSensitivity` | Legacy degrees-per-pixel fallback when there is no measured viewport. |
-| `scene.panorama.swipeSensitivity` | The corresponding trackpad fallback when there is no measured viewport. |
+| `scene.panorama.swipeSensitivity` | Degrees per CSS pixel of a two-finger trackpad swipe at 90° FOV, scaled with $\tan(\text{fov}/2)$. |
+| `scene.panorama.inertiaHalfLife` | Glide half-life in ms for drag release, two-finger trackpad swipes, and wheel/pinch zoom. |
 
 ## Hold an image point through the gesture
 
@@ -30,14 +33,11 @@ A one-finger or mouse drag retains its ray across consecutive moves. Two-touch
 pan and pinch retain the ray through the initial midpoint while combining
 midpoint motion and separation changes in one camera update.
 
-A trackpad swipe captures the sphere point under the cursor at the start of
-the pan. Later wheel events accumulate scroll displacement from that point;
-cursor motion does not pick another point. `attachLookInput` passes
-`swipe(dx, dy, at, continuing)` with `continuing` true while successive pan
-events are less than 180 ms apart, including operating-system momentum.
-It uses the binding Window's monotonic `performance.now()`. An idle gap of
-180 ms or more, another gesture, contact input, blur or cancellation starts
-a fresh pan. This works even when the optional anchor display is absent.
+A two-finger trackpad swipe turns `headingDeg` and `pitchDeg` directly by its
+scroll deltas scaled by `swipeSensitivity` and $\tan(\text{fov}/2)$ (`swipeFovScale`),
+regardless of cursor position, and shows no anchor marker. Both trackpad swipes
+and wheel/pinch zoom feed impulses into the look model's velocity and decay across
+frames with `inertiaHalfLife`, matching the map's `InertialCameraController`.
 
 The solver stops at the last feasible pose near a pitch limit without rolling
 the camera or jumping to the other mathematical branch. Keep the original ray
@@ -48,8 +48,8 @@ back. Recasting at the cursor on every event loses this behavior.
 While a drag is held, frame ticks do not apply its recorded velocity. On
 release, glide uses the camera's actual angular displacement, with heading
 wrapped across 0/360°. A stationary release, reduced motion or zero glide
-half-life stops immediately. Trackpad momentum belongs to the operating system;
-the look model adds no second swipe glide.
+half-life stops immediately. Off-centre wheel and pinch zoom retain the anchor
+ray at the pointer throughout their inertial glide.
 
 ## Draw the actual point
 
@@ -62,8 +62,9 @@ The optional `anchorMarkers` input port creates its renderer lazily. The host
 setting subscription applies toggles immediately. `createImageAnchorMarkers`
 from `./globe-browser` reuses Engine's map grab arrows and zoom reticle, converts
 the local projection to client coordinates, and clips outside the measured
-surface. A released grab uses the map's gray glide color. Wheel and Safari
-markers disappear 180 ms after the last event. Dropping from two touches to
+surface. A released grab uses the map's gray glide color. Wheel zoom and Safari
+pinch markers disappear 180 ms after the last event; trackpad swipes clear any
+active marker instead of showing one. Dropping from two touches to
 one hides the old midpoint until the remaining finger moves; blur, cancellation
 and detach clear the display, timers and subscriptions.
 
@@ -74,12 +75,12 @@ See [globe adapters](globe-bindings.md) for the host ports.
 ## Regression coverage
 
 - `tests/sphereInput.test.ts`: projection accuracy from 10° to 150° FOV, retained
-  rays, pitch-limit reversal, heading wrap and release velocity.
+  rays, pitch-limit reversal, heading wrap, release velocity and unanchored
+  trackpad swipes.
 - `tests/imageCameraAnchors.test.ts`: projected marker geometry, gesture flags,
   glide, subscriptions and missing-camera/viewport behavior.
-- `tests/imageAnchorMarkers.test.ts`: live toggles, cursor movement during a
-  trackpad stream, momentum, idle boundaries, absent/disabled markers, touch
-  transitions and cleanup.
+- `tests/imageAnchorMarkers.test.ts`: live toggles, unanchored trackpad swipes,
+  zoom expiry, absent/disabled markers, touch transitions and cleanup.
 - `tests/globeBindings.test.ts`: map styling, measured offsets and iframe realms.
 - Earth App's `src/app/sceneWorld.test.ts`: the real settings registry and viewer
   adapter together, including default-off and live enable/disable behavior.

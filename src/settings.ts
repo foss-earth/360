@@ -245,7 +245,7 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
   },
   {
     id: SHOW_IMAGE_ANCHORS_ID, label: "Show anchors",
-    description: "Shows the image point held by a drag or two-finger pan, and the point a zoom acts about, using the same markers as the map.",
+    description: "Shows the image point held by a drag or two-finger touch, and the point a zoom acts about, using the same markers as the map.",
     unit: "none", kind: "boolean", default: false,
     defaultReason: "Hidden by default, as asked; turn them on to see where gestures hold the image.",
     home: { tab: SPHERE_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: "src/globeBrowserBindings.ts",
@@ -268,8 +268,8 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
   }),
   quantity({
     id: "scene.panorama.swipeSensitivity", label: "Swipe to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: SPHERE_SETTINGS_TAB, section: "looking",
-    description: "How far the view turns for each CSS pixel a two-finger trackpad swipe scrolls when the panorama's viewport cannot be measured, with the input method set to Trackpad. With a measured viewport, the image follows the swipe one to one.",
-    reason: "The same fallback gain as dragging for an unmeasured viewport.", source: INPUT,
+    description: "How far the view turns at a 90° field of view for each CSS pixel a two-finger trackpad swipe scrolls inside a panorama, scaled with the field of view's tangent as you zoom.",
+    reason: "The same as dragging at a 90° field of view; scales with zoom.", source: INPUT,
   }),
   quantity({
     id: "scene.panorama.lookRate", label: "Key and stick look", unit: "deg/s", min: 1, max: 360, fallback: 90, scale: "log2", step: 0.1, tab: SPHERE_SETTINGS_TAB, section: "looking",
@@ -289,7 +289,7 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
   }),
   quantity({
     id: "scene.panorama.inertiaHalfLife", label: "Look glide", unit: "ms", min: 0, max: 1000, fallback: 100, step: 10, tab: SPHERE_SETTINGS_TAB, section: "looking",
-    description: "How long the view keeps turning after a drag, as the time for its speed to halve; 0 stops at once.", reason: "A brief optional continuation.", source: INPUT,
+    description: "How long the view keeps turning or zooming after a drag, swipe or zoom, as the time for its speed to halve; 0 stops at once.", reason: "A brief optional continuation.", source: INPUT,
   }),
   {
     id: "scene.panorama.entryOrientation", label: "On entering", description: "Where you look after entering: keep the heading and pitch you flew in with, or use the scene's suggested view. Opening view, below, can use a remembered or fixed look when moving between photographs.",

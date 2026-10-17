@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachLookInput, type ImageAnchorMarkers } from "../src/browserInput.js";
-import { createLookModel, type LookSettings, type LookState } from "../src/look.js";
+import { createLookModel, swipeFovScale, type LookSettings, type LookState } from "../src/look.js";
 import { projectSphereRay, sphereRay, type SpherePoint } from "../src/sphereCamera.js";
 
 const viewport = { width: 800, height: 600 };
@@ -26,12 +26,13 @@ function setup(options: { enabled?: boolean; markerSupport?: boolean; start?: Lo
     displays.push(display);
     return display;
   });
+  let currentGesture = options.gesture ?? "wheelZoom";
   const model = createLookModel(options.start ?? { headingDeg: 0.1, pitchDeg: 8, verticalFovDeg: 10 }, () => settings, () => {}, () => viewport);
   const binding = attachLookInput({
     window, canvas, model,
     localPoint: (x, y) => ({ x: x - offset.x, y: y - offset.y }),
     controlTakesKey: () => false,
-    createWheelGestureClassifier: () => () => options.gesture ?? "wheelZoom",
+    createWheelGestureClassifier: () => () => currentGesture,
     anchorMarkers: options.markerSupport === false ? undefined : {
       enabled: () => enabled,
       create,
@@ -40,6 +41,7 @@ function setup(options: { enabled?: boolean; markerSupport?: boolean; start?: Lo
     onExit: vi.fn(), onUserInput: vi.fn(), requestFrame: vi.fn(), safariGestures: true,
   });
   bindings.push(binding);
+  const setGesture = (next: "pan" | "wheelZoom") => { currentGesture = next; };
   const toggle = (next: boolean) => { enabled = next; for (const changed of listeners) changed(); };
   const latest = () => displays.at(-1)?.show.mock.lastCall?.[0] ?? null;
   const wheel = (point: SpherePoint, dx = 0, dy = -20) => canvas.dispatchEvent(new WheelEvent("wheel", {
@@ -51,7 +53,7 @@ function setup(options: { enabled?: boolean; markerSupport?: boolean; start?: Lo
     Object.defineProperty(event, "timeStamp", { value: time });
     canvas.dispatchEvent(event);
   };
-  return { canvas, model, binding, create, displays, listeners, toggle, latest, wheel, pointer };
+  return { canvas, model, binding, create, displays, listeners, setGesture, toggle, latest, wheel, pointer };
 }
 
 afterEach(() => {
@@ -134,65 +136,31 @@ describe("optional image gesture anchors", () => {
     expect(latest()).toMatchObject({ x: expect.closeTo(470, 5), y: expect.closeTo(290, 5), grab: true, zoom: false });
   });
 
-  it.each([
-    { name: "visible", enabled: true },
-    { name: "disabled", enabled: false },
-    { name: "unconfigured", markerSupport: false },
-  ])("keeps the original sphere point through a trackpad swipe and momentum with $name markers", options => {
-    const { model, latest, wheel, create } = setup({ ...options, gesture: "pan", start: { headingDeg: 42, pitchDeg: 20, verticalFovDeg: 70 } });
-    const from = { x: 580, y: 250 };
-    const ray = sphereRay(model.get(), viewport, from);
-    let destination = { ...from };
-    const updates = [
-      { at: from, dx: 26, dy: -14, gap: 0 },
-      { at: { x: 180, y: 500 }, dx: 33, dy: 16, gap: 16 },
-      // Smaller scroll deltas stand in for the OS's momentum after release.
-      { at: { x: 690, y: 100 }, dx: 4, dy: -2, gap: 90 },
-    ];
-    for (const { at, dx, dy, gap } of updates) {
-      vi.advanceTimersByTime(gap);
-      wheel(at, dx, dy);
-      destination = { x: destination.x - dx, y: destination.y - dy };
-      const projected = projectSphereRay(model.get(), viewport, ray)!;
-      expect(projected.x).toBeCloseTo(destination.x, 6);
-      expect(projected.y).toBeCloseTo(destination.y, 6);
-      if (options.enabled) {
-        expect(latest()).toMatchObject({ x: expect.closeTo(projected.x, 6), y: expect.closeTo(projected.y, 6), grab: true, zoom: false });
-      } else expect(create).not.toHaveBeenCalled();
-    }
-  });
-
-  it.each([false, true])("takes a fresh sphere point after 180ms of wheel inactivity with markers enabled %s", enabled => {
-    const { model, latest, wheel } = setup({ enabled, gesture: "pan" });
+  it("never creates or shows anchor markers for a trackpad swipe, and hides any active marker", () => {
+    const { model, latest, wheel, create, setGesture } = setup({ enabled: true, gesture: "pan", start: { headingDeg: 42, pitchDeg: 20, verticalFovDeg: 70 } });
+    const scale = swipeFovScale(70);
     wheel({ x: 580, y: 250 }, 26, -14);
-    vi.advanceTimersByTime(180);
-    const from = { x: 240, y: 420 };
-    const ray = sphereRay(model.get(), viewport, from);
-    wheel(from, -12, 8);
-    const projected = projectSphereRay(model.get(), viewport, ray)!;
-    expect(projected.x).toBeCloseTo(from.x + 12, 6);
-    expect(projected.y).toBeCloseTo(from.y - 8, 6);
-    if (enabled) expect(latest()).toMatchObject({ x: expect.closeTo(projected.x, 6), y: expect.closeTo(projected.y, 6) });
-  });
-
-  it.each(["blur", "cancel"] as const)("takes a fresh sphere point after %s interrupts a trackpad swipe", finish => {
-    const { model, binding, latest, wheel } = setup({ enabled: true, gesture: "pan" });
-    wheel({ x: 580, y: 250 }, 26, -14);
-    vi.advanceTimersByTime(16);
-    if (finish === "blur") window.dispatchEvent(new Event("blur"));
-    else binding.cancel();
+    wheel({ x: 180, y: 500 }, 33, 16);
+    expect(create).not.toHaveBeenCalled();
     expect(latest()).toBeNull();
-    const from = { x: 240, y: 420 };
-    const ray = sphereRay(model.get(), viewport, from);
-    wheel(from, -12, 8);
-    const projected = projectSphereRay(model.get(), viewport, ray)!;
-    expect(projected.x).toBeCloseTo(from.x + 12, 6);
-    expect(projected.y).toBeCloseTo(from.y - 8, 6);
-    expect(latest()).toMatchObject({ x: expect.closeTo(projected.x, 6), y: expect.closeTo(projected.y, 6), grab: true, zoom: false });
+    for (let i = 0; i < 600 && model.moving(); i++) model.step(1000 / 60);
+    expect(model.get().headingDeg).toBeCloseTo(42 + 5.9 * scale, 2);
+    expect(model.get().pitchDeg).toBeCloseTo(20 - 0.2 * scale, 2);
+    expect(latest()).toBeNull();
+
+    // If a wheel zoom created a transient marker earlier, a swipe hides it at once.
+    setGesture("wheelZoom");
+    wheel({ x: 400, y: 300 }, 0, -100);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(latest()).not.toBeNull();
+    setGesture("pan");
+    wheel({ x: 400, y: 300 }, 10, -5);
+    expect(latest()).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["pan", "wheelZoom"] as const)("expires %s markers 180ms after the last wheel event using one timer", gesture => {
-    const { model, latest, wheel, toggle, create } = setup({ enabled: true, gesture });
+  it("expires wheelZoom markers 180ms after the last wheel event using one timer", () => {
+    const { model, latest, wheel, toggle, create } = setup({ enabled: true, gesture: "wheelZoom" });
     const at = { x: 580, y: 250 };
     const ray = sphereRay(model.get(), viewport, at);
     wheel(at, 26, -14);
