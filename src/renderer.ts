@@ -190,6 +190,8 @@ export interface SphereRenderer {
   cameraFrame(view?: NavigationPresentation | null): SphereCameraFrame | null;
   /** Orbs under a canvas point (CSS px), nearest first, then by id; occluded ones left out by the caller's test. */
   pick(clientX: number, clientY: number, isOccluded: (eye: Vec3, direction: Vec3, distance: number) => boolean): OrbHit[];
+  /** Orbs along a world ray, such as a headset controller's, ordered as `pick` orders them. */
+  pickRay(origin: Vec3, direction: Vec3, isOccluded: (eye: Vec3, direction: Vec3, distance: number) => boolean): OrbHit[];
   /** Where a world direction from the eye lands on the canvas, CSS px, or null behind the view. */
   project(direction: Vec3, frame?: SphereCameraFrame): { x: number; y: number } | null;
   /**
@@ -297,6 +299,11 @@ export interface SphereRendererOptions {
   appearance: OrbAppearance;
   /** The lease's presented view, read at draw time. */
   getPresentationView(): NavigationPresentation | null;
+  /**
+   * Whether each eye's own view and projection are drawn, as in an immersive
+   * headset session: presented views, and the views of fades, are then left out.
+   */
+  isHeadTracked?(): boolean;
   requestRender(): void;
   /** A shader rejected by the device, once per distinct diagnostic, for the host's log. */
   onError?: (message: string) => void;
@@ -402,9 +409,13 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
   };
 
   const canvasCssHeight = (): number => options.viewportHeightCssPx();
+  const headTracked = (): boolean => options.isHeadTracked?.() === true;
+  /** The view that replaces the camera's: none while a head is tracked. */
+  const presentationView = (): NavigationPresentation | null => (headTracked() ? null : options.getPresentationView());
+  const immersionView = (): NavigationPresentation | null => (headTracked() ? null : immersionState?.view ?? null);
 
   /** The camera the globe is drawn with this frame, or the presentation that replaces its view. */
-  function currentFrame(presentation = options.getPresentationView()): SphereCameraFrame | null {
+  function currentFrame(presentation = presentationView()): SphereCameraFrame | null {
     const camera: Camera | null = options.getCamera();
     if (!camera) return null;
     // The eye is updated with the view matrix: bring both up to date before reading either.
@@ -480,7 +491,7 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
   let historyFrameId = -1;
   function drawFrame(): { current: SphereCameraFrame; uniforms: SphereCameraFrame } | null {
     const id = engine.frameId;
-    const presentation = options.getPresentationView();
+    const presentation = presentationView();
     const lean = experiments.bookkeeping;
     const key = lean ? "" : cameraKey();
     // Always evaluated, so the inputs it keeps are this draw's.
@@ -780,7 +791,8 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
       if (!immersionState) return;
       const material = immersionMesh.material as ShaderMaterial | null;
       if (!material) return;
-      const override = immersionState.view ? currentFrame(immersionState.view) : null;
+      const fade = immersionView();
+      const override = fade ? currentFrame(fade) : null;
       const frames = override ? { current: override, uniforms: override } : drawFrame();
       if (!frames) return;
       applyImmersionUniforms(material, frames.uniforms);
@@ -846,13 +858,25 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
     if (!frame) return [];
     const ray = rayThrough(frame, clientX, clientY);
     if (!ray) return [];
+    return hitsAlong(frame, frame.eye, ray, isOccluded);
+  }
+
+  function pickRay(origin: Vec3, direction: Vec3, isOccluded: (eye: Vec3, direction: Vec3, distance: number) => boolean): OrbHit[] {
+    const frame = currentFrame();
+    const size = length(direction);
+    if (!frame || !(size > 0)) return [];
+    return hitsAlong(frame, origin, scale(direction, 1 / size), isOccluded);
+  }
+
+  /** Orbs along a unit ray from `origin`, sized as `frame` draws them. */
+  function hitsAlong(frame: SphereCameraFrame, origin: Vec3, ray: Vec3, isOccluded: (eye: Vec3, direction: Vec3, distance: number) => boolean): OrbHit[] {
     const tanHalf = Math.tan(frame.view.verticalFovRad / 2);
     const hitHalfAngle = Math.atan(((appearance.hitTargetDiameterCssPx / 2) * 2 * tanHalf) / Math.max(1, frame.viewportHeightCssPx));
     const hits: OrbHit[] = [];
     for (const orb of orbs.values()) {
       const marker = orb.state.marker;
       if (!marker || !orb.state.visible || !orb.state.texture) continue;
-      const rel = sub(marker, frame.eye);
+      const rel = sub(marker, origin);
       const d = length(rel);
       const radius = orb.drawnRadius(d, frame);
       if (d <= radius) continue;
@@ -863,7 +887,7 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
       const onSilhouette = angle <= Math.asin(radius / d) + outlineAngle;
       if (!onSilhouette && angle > hitHalfAngle) continue;
       const depth = d - radius;
-      if (isOccluded(frame.eye, axis, depth)) continue;
+      if (isOccluded(origin, axis, depth)) continue;
       hits.push({ id: orb.id, depthMeters: depth, onSilhouette });
     }
     return hits.sort((a, b) => Number(b.onSilhouette) - Number(a.onSilhouette) || a.depthMeters - b.depthMeters || (a.id < b.id ? -1 : 1));
@@ -918,7 +942,8 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
         triangleData.applyToMesh(mesh);
         material = immersionMaterial(immersionDefines(immersionState!, output));
         observer = mesh.onBeforeRenderObservable.add(() => {
-          const override = immersionState?.view ? currentFrame(immersionState.view) : null;
+          const fade = immersionView();
+          const override = fade ? currentFrame(fade) : null;
           const frames = override ? { current: override, uniforms: override } : drawFrame();
           if (!frames) return;
           captured = frames.current;
@@ -969,8 +994,9 @@ export function createSphereRenderer(scene: Scene, options: SphereRendererOption
       appearance = next;
       options.requestRender();
     },
-    cameraFrame: view => (view ? currentFrame(view) : drawFrame()?.current ?? currentFrame()),
+    cameraFrame: view => (view && !headTracked() ? currentFrame(view) : drawFrame()?.current ?? currentFrame()),
     pick,
+    pickRay,
     project,
     probe,
     setExperiments(next) {

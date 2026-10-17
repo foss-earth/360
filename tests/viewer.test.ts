@@ -266,3 +266,19 @@ describe("injected viewer lifecycle", () => {
     f.viewer.dispose(); expect(f.holds.active).toBe(0);
   });
 });
+
+describe("picking along a ray", () => {
+  it("names the shown images along a headset's pointer ray, on the map only", async () => {
+    const f = fixture(), input = image("a");
+    input.placement.marker = [6378147, 0, 0];
+    const pickRay = vi.fn(() => [{ id: f.orbs[0]!.id, distance: 10 }, { id: "not-a-viewer-orb", distance: 20 }]);
+    f.options.renderer.pickRay = pickRay as never;
+    const handle = await f.viewer.prepare(input, new AbortController().signal);
+    await handle.ready(); f.viewer.replaceImages([handle]); await f.advance(16);
+    expect(f.viewer.pickRay!([1, 2, 3], [0, 1, 0])).toEqual(["a"]);
+    expect(pickRay).toHaveBeenCalledWith([1, 2, 3], [0, 1, 0], f.options.isOccluded);
+    await f.viewer.enter("a");
+    expect(f.viewer.pickRay!([1, 2, 3], [0, 1, 0])).toEqual([]);
+    f.viewer.dispose();
+  });
+});

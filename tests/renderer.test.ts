@@ -1,12 +1,12 @@
 import { BaseTexture, FreeCamera, Matrix, NullEngine, Scene, ShaderLanguage, ShaderMaterial, Vector3, Vector4, Viewport } from "@babylonjs/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dot, length, normalize, type Mat3, type Vec3 } from "@foss-earth/images";
-import { createSphereRenderer, imageFromClipMatrix, orbDrawConstants, orbQuad, type SphereRendererExperiments } from "../src/renderer.js";
+import { createSphereRenderer, imageFromClipMatrix, orbDrawConstants, orbQuad, type SphereRendererExperiments, type SphereRendererOptions } from "../src/renderer.js";
 
 const engines: NullEngine[] = [];
 afterEach(() => { for (const engine of engines.splice(0)) engine.dispose(); });
 
-function setup(configure: (engine: NullEngine) => void = () => {}, experiments: Partial<SphereRendererExperiments> = {}) {
+function setup(configure: (engine: NullEngine) => void = () => {}, experiments: Partial<SphereRendererExperiments> = {}, extra: Partial<SphereRendererOptions> = {}) {
   const engine = new NullEngine();
   configure(engine);
   engines.push(engine);
@@ -17,7 +17,7 @@ function setup(configure: (engine: NullEngine) => void = () => {}, experiments: 
   scene.activeCamera = camera;
   const requestRender = vi.fn();
   const onError = vi.fn();
-  const renderer = createSphereRenderer(scene, { getCamera: () => camera, viewportHeightCssPx: () => engine.getRenderHeight(), presentationLayerMask: 0x10000000, appearance: { previewFovDeg: 90, markerDiameterCssPx: { min: 24, max: 96 }, hitTargetDiameterCssPx: 44 }, getPresentationView: () => null, requestRender, onError, experiments });
+  const renderer = createSphereRenderer(scene, { getCamera: () => camera, viewportHeightCssPx: () => engine.getRenderHeight(), presentationLayerMask: 0x10000000, appearance: { previewFovDeg: 90, markerDiameterCssPx: { min: 24, max: 96 }, hitTargetDiameterCssPx: 44 }, getPresentationView: () => null, requestRender, onError, experiments, ...extra });
   return { camera, renderer, engine, scene, requestRender, onError };
 }
 
@@ -146,6 +146,35 @@ describe("sphere renderer camera frame", () => {
     const tanHalf = Math.tan(frame.view.verticalFovRad / 2);
     const raised = renderer.project(normalize(frame.view.forward.map((value, axis) => value + frame.view.up[axis] * tanHalf * 0.5) as Vec3), frame)!;
     expect(raised.y).toBeCloseTo(262.5, 6);
+  });
+});
+
+describe("head-tracked drawing", () => {
+  const content: Mat3 = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  const presented = { position: { x: 0, y: 0, z: -10 }, forward: { x: 0, y: 1, z: 0 }, up: { x: 0, y: 0, z: 1 }, verticalFovRad: 1 };
+
+  it("draws each eye's own view instead of the presented view while a head is tracked", () => {
+    let tracked = false;
+    const { renderer } = setup(undefined, {}, { getPresentationView: () => presented, isHeadTracked: () => tracked });
+    expect(renderer.cameraFrame()!.view.forward[1]).toBeCloseTo(1, 6);
+    tracked = true;
+    const frame = renderer.cameraFrame(presented)!;
+    // The camera looks from z = -10 at the origin.
+    expect(frame.view.forward[2]).toBeCloseTo(1, 6);
+    expect(frame.view.verticalFovRad).not.toBe(1);
+  });
+
+  it("picks orbs along a world ray from its own origin", () => {
+    const { renderer, scene } = setup(engine => { Object.assign(engine.getCaps(), { fragmentDepthSupported: true, standardDerivatives: true }); });
+    const texture = new BaseTexture(scene);
+    renderer.addOrb("north", { marker: [0, 20, 0], radiusMeters: 1, content, texture, visible: true, outline: null, displayScale: 1 });
+    renderer.addOrb("east", { marker: [20, 0, 0], radiusMeters: 1, content, texture, visible: true, outline: null, displayScale: 1 });
+    const never = () => false;
+    expect(renderer.pickRay([0, 0, 0], [0, 2, 0], never).map(hit => hit.id)).toEqual(["north"]);
+    expect(renderer.pickRay([0, 0, 0], [1, 0, 0], never).map(hit => hit.id)).toEqual(["east"]);
+    expect(renderer.pickRay([0, 0, 0], [0, 0, 1], never)).toEqual([]);
+    expect(renderer.pickRay([0, 0, 0], [0, 1, 0], () => true)).toEqual([]);
+    expect(renderer.pickRay([0, 0, 0], [0, 0, 0], never)).toEqual([]);
   });
 });
 

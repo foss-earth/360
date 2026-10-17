@@ -82,7 +82,7 @@ export interface ViewerSettings {
   previewHoldMs: number | null;
 }
 export interface ImageViewerOptions {
-  renderer: Pick<SphereRenderer, "available" | "unavailableReason" | "addOrb" | "immersion" | "setAppearance" | "cameraFrame" | "pick" | "project">;
+  renderer: Pick<SphereRenderer, "available" | "unavailableReason" | "addOrb" | "immersion" | "setAppearance" | "cameraFrame" | "pick" | "project"> & Partial<Pick<SphereRenderer, "pickRay">>;
   resources: ViewerResources;
   world: ViewerWorldMath;
   poses: ViewerPosePorts;
@@ -747,6 +747,7 @@ export function createImageViewer(options: ImageViewerOptions): SettledPublished
     },
     subscribe(listener) { if (!disposed) { listeners.add(listener); listener(status()); } return () => { listeners.delete(listener); }; },
     pick(x, y) { if (disposed || phase !== "overview") return []; const ids = new Map([...entries.values()].filter(onMap).map(entry => [entry.drawId, entry.input.id])); return renderer.pick(x, y, options.isOccluded).flatMap(hit => ids.has(hit.id) ? [ids.get(hit.id)!] : []); },
+    pickRay(origin, direction) { if (disposed || phase !== "overview") return []; const ids = new Map([...entries.values()].filter(onMap).map(entry => [entry.drawId, entry.input.id])); return (renderer.pickRay?.([...origin], [...direction], options.isOccluded) ?? []).flatMap(hit => ids.has(hit.id) ? [ids.get(hit.id)!] : []); },
     hover(id) { const next = phase === "overview" && id && entries.has(id) && !mapHidden.has(id) ? id : null; if (next === hovered) return; hovered = next; if (!hoverRelease) hoverRelease = options.holdRendering(); options.requestRender(); emit(); },
     reposition, setImageOpacity,
     updateActions(id, actions) {

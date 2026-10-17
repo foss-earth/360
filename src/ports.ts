@@ -100,6 +100,8 @@ export interface ImageViewer {
   describeImage?(id: string): ViewerImageInput | null;
   subscribe(listener: (status: ViewerStatus) => void): () => void;
   pick(clientX: number, clientY: number): readonly string[];
+  /** The images on the map along a world ray, nearest first: a headset controller's pointer. */
+  pickRay?(origin: readonly [number, number, number], direction: readonly [number, number, number]): readonly string[];
   hover(id: string | null): void;
   /**
    * Moves a published image. While that image is being shown, the presented
