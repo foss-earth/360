@@ -5,10 +5,17 @@
  * control-key policy come in as ports.
  */
 import type { ActionIntentFrame } from "@felipegalind0/gamepad-tools/core";
-import type { ImageCameraTarget, SurfacePoint, TouchPair } from "./cameraTarget.js";
+import type { ImageCameraAnchor, ImageCameraTarget, SurfacePoint, TouchPair } from "./cameraTarget.js";
 const WHEEL_LINE_PX = 16;
 const WHEEL_NOTCH_PX = 100;
 const PINCH_WHEEL_PX_PER_LOG_SCALE = 100;
+
+/** A host-owned display of the camera's projected, surface-local gesture anchor. */
+export interface ImageAnchorMarkers {
+  show(anchor: ImageCameraAnchor | null): void;
+  destroy(): void;
+}
+
 export interface LookInputOptions {
   window: Window;
   controlTakesKey(target: EventTarget | null, key: string): boolean;
@@ -16,8 +23,14 @@ export interface LookInputOptions {
   /** The element that shows the image and takes its pointer input. */
   canvas: HTMLElement;
   model: ImageCameraTarget;
-  /** A client point in the target's surface-local CSS pixels, or null; without it zoom is anchored at the centre. */
+  /** A client point in the target's surface-local CSS pixels, or null; without it gestures anchor at the centre. */
   localPoint?: (clientX: number, clientY: number) => SurfacePoint | null;
+  /** Optional gesture-anchor display. Nothing is created until enabled and an anchor is visible. */
+  anchorMarkers?: {
+    enabled(): boolean;
+    create(canvas: HTMLElement): ImageAnchorMarkers;
+    subscribe?(changed: () => void): () => void;
+  };
   /**
    * Wheel and Safari gesture events through a router that keeps each gesture
    * with the element it began over; without one, this element listens itself.
@@ -172,7 +185,58 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     precedingWheelMs: options.precedingWheelMs,
   });
   let gestureScale = 1;
+  /** A trackpad pan holds its first image point through the stream, including OS momentum. */
+  let lastSwipeMs = -Infinity;
   let attached = true;
+  let markers: ImageAnchorMarkers | null = null;
+  let markerTimer: number | null = null;
+  let transientAnchor = false;
+  let markersSuppressed = false;
+
+  const clearMarkerTimer = (): void => {
+    if (markerTimer !== null) window.clearTimeout(markerTimer);
+    markerTimer = null;
+  };
+  const refreshMarkers = (): void => {
+    const display = options.anchorMarkers;
+    if (!display || !model.anchor) return;
+    if (!attached || !display.enabled()) {
+      markers?.destroy();
+      markers = null;
+      return;
+    }
+    const anchor = markersSuppressed ? null : model.anchor();
+    const visible = anchor && (pointers.size > 0 || pinching || model.moving() || transientAnchor) ? anchor : null;
+    if (visible) markers ??= display.create(canvas);
+    markers?.show(visible);
+  };
+  const beginContactMarkers = (): void => {
+    lastSwipeMs = -Infinity;
+    markersSuppressed = false;
+    transientAnchor = false;
+    clearMarkerTimer();
+  };
+  const beginTransientMarkers = (): void => {
+    if (!options.anchorMarkers || !model.anchor) return;
+    markersSuppressed = false;
+    transientAnchor = true;
+    clearMarkerTimer();
+    markerTimer = window.setTimeout(() => {
+      markerTimer = null;
+      transientAnchor = false;
+      refreshMarkers();
+    }, WHEEL_IDLE_MS);
+  };
+  const hideMarkers = (): void => {
+    lastSwipeMs = -Infinity;
+    markersSuppressed = true;
+    transientAnchor = false;
+    clearMarkerTimer();
+    markers?.show(null);
+  };
+  const unsubscribeAnchors = options.anchorMarkers ? model.subscribeAnchors?.(refreshMarkers) : undefined;
+  const unsubscribeMarkers = options.anchorMarkers?.subscribe?.(refreshMarkers);
+  const refreshUnsubscribedMarkers = (): void => { if (!unsubscribeAnchors) refreshMarkers(); };
 
   const syncRates = (): void => {
     const key = (name: string) => (keys.has(name) ? 1 : 0);
@@ -182,6 +246,7 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
       lookY: Math.max(-1, Math.min(1, key("ArrowUp") - key("ArrowDown") + padRates.lookY)),
       zoom: Math.max(-1, Math.min(1, zoomKeys + padRates.zoom)),
     });
+    refreshMarkers();
     if (model.moving()) options.requestFrame();
   };
 
@@ -207,7 +272,11 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     const pair = firstTwo();
     if (!pair) { pinchFrom = null; pinching = false; return; }
     const now = pairOf(pair[0], pair[1]);
-    if (pinchFrom && pinchFrom.separation > 0 && now.separation > 0) model.touchPinch(pinchFrom, now);
+    if (pinchFrom && pinchFrom.separation > 0 && now.separation > 0) {
+      beginContactMarkers();
+      model.touchPinch(pinchFrom, now);
+      refreshUnsubscribedMarkers();
+    }
     pinchFrom = now;
     pinching = true;
     options.requestFrame();
@@ -215,10 +284,14 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   const finishContacts = (time: number, lastAt: number, drove: boolean): void => {
     if (pointers.size + outside.size >= 2) { rebaseline(); return; }
     pinchFrom = null;
-    if (pointers.size > 0 || outside.size > 0) return;
+    if (pointers.size > 0 || outside.size > 0) {
+      if (pinching) hideMarkers();
+      return;
+    }
     if (!drove && !pinching) return;
     pinching = false;
     model.release(time - lastAt);
+    refreshUnsubscribedMarkers();
     if (model.moving()) options.requestFrame();
   };
   const nodeOf = (options.window as unknown as { Node?: typeof Node }).Node;
@@ -226,6 +299,7 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.pointerType === "mouse" && event.button !== 0) return;
+    beginContactMarkers();
     model.cancelInertia();
     options.onUserInput();
     pointers.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
@@ -243,7 +317,10 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     pointers.set(event.pointerId, current);
     if (pointers.size + outside.size >= 2) applyPinch();
     else {
-      model.drag(current.x - last.x, current.y - last.y, current.at - last.at);
+      const from = local(last.x, last.y), to = local(current.x, current.y);
+      beginContactMarkers();
+      model.drag(from && to ? to.x - from.x : current.x - last.x, from && to ? to.y - from.y : current.y - last.y, current.at - last.at, from);
+      refreshUnsubscribedMarkers();
       options.requestFrame();
     }
   };
@@ -252,6 +329,12 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (!last || !pointers.delete(event.pointerId)) return;
     finishContacts(event.timeStamp, last.at, true);
   };
+  const onPointerCancel = (event: PointerEvent): void => {
+    if (!pointers.has(event.pointerId)) return;
+    onPointerUp(event);
+    hideMarkers();
+    model.cancelInertia();
+  };
   const onForeignDown = (event: PointerEvent): void => {
     if (!attached || event.pointerType !== "touch" || overSurface(event.target)) return;
     outside.set(event.pointerId, { x: event.clientX, y: event.clientY, at: event.timeStamp });
@@ -259,6 +342,7 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (pointers.size + outside.size < 2) return;
     event.preventDefault();
     event.stopPropagation();
+    beginContactMarkers();
     model.cancelInertia();
     options.onUserInput();
     rebaseline();
@@ -279,17 +363,32 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (pointers.size + outside.size >= 2) { event.preventDefault(); event.stopPropagation(); }
     finishContacts(event.timeStamp, last.at, false);
   };
+  const onForeignCancel = (event: PointerEvent): void => {
+    if (!outside.has(event.pointerId)) return;
+    onForeignUp(event);
+    hideMarkers();
+    model.cancelInertia();
+  };
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
     const gesture = classifyWheel(event);
-    if (gesture === "ignore") return;
+    if (gesture === "ignore") { lastSwipeMs = -Infinity; return; }
     options.onUserInput();
     const scale = event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? WHEEL_NOTCH_PX * 3 : 1;
     const at = local(event.clientX, event.clientY);
+    beginTransientMarkers();
     // A swipe, or shift+wheel, looks around: what pans or orbits the globe.
-    if (gesture === "pan" || gesture === "orbit") model.swipe(event.deltaX * scale, event.deltaY * scale);
-    else if (gesture === "pinchZoom") model.pinchBy((-event.deltaY * scale) / PINCH_WHEEL_PX_PER_LOG_SCALE, at);
-    else model.wheel(event.deltaY * scale, at);
+    if (gesture === "pan" || gesture === "orbit") {
+      const now = window.performance.now();
+      const continuing = now - lastSwipeMs < WHEEL_IDLE_MS;
+      lastSwipeMs = now;
+      model.swipe(event.deltaX * scale, event.deltaY * scale, at, continuing);
+    } else {
+      lastSwipeMs = -Infinity;
+      if (gesture === "pinchZoom") model.pinchBy((-event.deltaY * scale) / PINCH_WHEEL_PX_PER_LOG_SCALE, at);
+      else model.wheel(event.deltaY * scale, at);
+    }
+    refreshUnsubscribedMarkers();
     options.requestFrame();
   };
   /** A Safari gesture's own point when it has one, else the last pointer, else none: the centre. */
@@ -301,14 +400,18 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   // Safari's trackpad pinch: `scale` is relative to the gesture's start.
   const onGestureStart = (event: Event): void => {
     event.preventDefault();
+    lastSwipeMs = -Infinity;
     gestureScale = 1;
   };
   const onGestureChange = (event: Event): void => {
     event.preventDefault();
+    lastSwipeMs = -Infinity;
     const next = (event as Event & { scale?: number }).scale;
     if (typeof next !== "number" || !(next > 0)) return;
     options.onUserInput();
+    beginTransientMarkers();
     model.pinchBy(Math.log(next / gestureScale), gesturePoint(event));
+    refreshUnsubscribedMarkers();
     gestureScale = next;
     options.requestFrame();
   };
@@ -342,6 +445,7 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
     if (keys.delete(event.key)) syncRates();
   };
   const onBlur = (): void => {
+    hideMarkers();
     keys.clear();
     for (const id of pointers.keys()) { try { canvas.releasePointerCapture(id); } catch { /* released */ } }
     pointers.clear(); outside.clear(); pinchFrom = null; pinching = false;
@@ -356,14 +460,14 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
   canvas.addEventListener("pointerdown", onPointerDown);
   canvas.addEventListener("pointermove", onPointerMove);
   canvas.addEventListener("pointerup", onPointerUp);
-  canvas.addEventListener("pointercancel", onPointerUp);
+  canvas.addEventListener("pointercancel", onPointerCancel);
   canvas.addEventListener("pointerleave", onPointerLeave);
   const foreign = options.claimForeignTouch === true;
   if (foreign) {
     window.addEventListener("pointerdown", onForeignDown, { capture: true });
     window.addEventListener("pointermove", onForeignMove, { capture: true });
     window.addEventListener("pointerup", onForeignUp, { capture: true });
-    window.addEventListener("pointercancel", onForeignUp, { capture: true });
+    window.addEventListener("pointercancel", onForeignCancel, { capture: true });
   }
   const unroute = options.router?.register(canvas, { wheel: onWheel, gesture: onRoutedGesture }) ?? null;
   if (!unroute) {
@@ -406,13 +510,13 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
-      canvas.removeEventListener("pointercancel", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerCancel);
       canvas.removeEventListener("pointerleave", onPointerLeave);
       if (foreign) {
         window.removeEventListener("pointerdown", onForeignDown, { capture: true });
         window.removeEventListener("pointermove", onForeignMove, { capture: true });
         window.removeEventListener("pointerup", onForeignUp, { capture: true });
-        window.removeEventListener("pointercancel", onForeignUp, { capture: true });
+        window.removeEventListener("pointercancel", onForeignCancel, { capture: true });
       }
       unroute?.();
       canvas.removeEventListener("wheel", onWheel);
@@ -422,6 +526,11 @@ export function attachLookInput(options: LookInputOptions): LookInputBinding {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
+      unsubscribeAnchors?.();
+      unsubscribeMarkers?.();
+      hideMarkers();
+      markers?.destroy();
+      markers = null;
       for (const id of pointers.keys()) { try { canvas.releasePointerCapture(id); } catch { /* released */ } }
       pointers.clear();
       keys.clear();

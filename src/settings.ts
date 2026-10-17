@@ -5,6 +5,8 @@ export const SCENES_TAB = "scenes";
 export const SPHERE_TAB = "panorama";
 /** Shown only inside a sphere. */
 export const SPHERE_SETTINGS_TAB = "panorama-settings";
+/** Optional navigation markers shared by the full panorama and its previews. */
+export const SHOW_IMAGE_ANCHORS_ID = "scene.panorama.showAnchors";
 
 /** Viewer-owned experiments retain their existing Renderer tab home. */
 export const VIEWER_EXPERIMENT_IDS = {
@@ -242,9 +244,16 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
     home: { tab: SPHERE_SETTINGS_TAB, section: "image", level: "main" }, appliesLive: true, source: LOADER,
   },
   {
+    id: SHOW_IMAGE_ANCHORS_ID, label: "Show anchors",
+    description: "Shows the image point held by a drag or two-finger pan, and the point a zoom acts about, using the same markers as the map.",
+    unit: "none", kind: "boolean", default: false,
+    defaultReason: "Hidden by default, as asked; turn them on to see where gestures hold the image.",
+    home: { tab: SPHERE_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: "src/globeBrowserBindings.ts",
+  },
+  {
     id: "scene.panorama.verticalFovRange", label: "Zoom range", description: "The narrowest and widest vertical view inside a panorama.",
-    unit: "deg", kind: "range", bounds: () => ({ min: 10, max: 179, reason: "A flat view cannot show 180°, which scene views and history reject, and below 10° it magnifies past most sources." }), step: 1,
-    default: { min: 20, max: 120 }, defaultReason: "As asked: close enough at 20° to look at detail, wide enough at 120° to take in most of the scene at once.",
+    unit: "deg", kind: "range", bounds: () => ({ min: 10, max: 150, reason: "The widest allowed vertical view is 150°; below 10° it magnifies past most sources." }), step: 1,
+    default: { min: 20, max: 140 }, defaultReason: "As asked: close enough at 20° to look at detail, wide enough at 140° to take in most of the scene at once.",
     home: { tab: SPHERE_SETTINGS_TAB, section: "looking", level: "main" }, appliesLive: true, source: INPUT,
   },
   {
@@ -255,12 +264,12 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
   },
   quantity({
     id: "scene.panorama.dragSensitivity", label: "Drag to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: SPHERE_SETTINGS_TAB, section: "looking",
-    description: "How far the view turns for each CSS pixel you drag inside a panorama.", reason: "A starting pointer gain; user trial pending.", source: INPUT,
+    description: "How far the view turns for each CSS pixel you drag when the panorama's viewport cannot be measured. With a measured viewport, dragging keeps the image under your pointer.", reason: "A fallback pointer gain for an unmeasured viewport.", source: INPUT,
   }),
   quantity({
     id: "scene.panorama.swipeSensitivity", label: "Swipe to look", unit: "deg/px", min: 0.01, max: 2, fallback: 0.15, scale: "log2", step: 0.05, tab: SPHERE_SETTINGS_TAB, section: "looking",
-    description: "How far the view turns for each CSS pixel a two-finger trackpad swipe scrolls inside a panorama, with the input method set to Trackpad.",
-    reason: "The same as dragging; user trial pending.", source: INPUT,
+    description: "How far the view turns for each CSS pixel a two-finger trackpad swipe scrolls when the panorama's viewport cannot be measured, with the input method set to Trackpad. With a measured viewport, the image follows the swipe one to one.",
+    reason: "The same fallback gain as dragging for an unmeasured viewport.", source: INPUT,
   }),
   quantity({
     id: "scene.panorama.lookRate", label: "Key and stick look", unit: "deg/s", min: 1, max: 360, fallback: 90, scale: "log2", step: 0.1, tab: SPHERE_SETTINGS_TAB, section: "looking",
@@ -321,7 +330,7 @@ const SPHERE_SETTINGS: readonly ParameterSpec[] = [
   {
     id: "scene.panorama.entryFov", label: "Field of view",
     description: "How much of a panorama you see, top to bottom, once you have entered it from the map, within the zoom range. The map's keeps the field of view the map had; the scene's view, when chosen above, brings its own.",
-    unit: "deg", kind: "number", named: [{ id: "map", label: "The map's" }], bounds: () => ({ min: 10, max: 179 }), step: 1, scale: "linear",
+    unit: "deg", kind: "number", named: [{ id: "map", label: "The map's" }], bounds: () => ({ min: 10, max: 150 }), step: 1, scale: "linear",
     default: 100, defaultReason: "As asked: wide enough to see where you are as soon as you arrive.",
     home: { tab: SPHERE_SETTINGS_TAB, section: "entering", level: "main" }, appliesLive: true, source: LOADER,
   },

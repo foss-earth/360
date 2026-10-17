@@ -90,6 +90,11 @@ The generic Renderer owns that section and its `all` and `presentationCandidates
 
 `./input` takes explicit window, control-key and wheel-classifier ports. Detached handlers do nothing.
 
+Measured panorama drags, touch pinches and trackpad pans hold the image point
+where the gesture began. **Looking → Show anchors** shows map-style markers,
+off by default. See [panorama gestures and visible anchors](docs/gesture-anchors.md)
+for the FOV limits, gesture lifetime, viewport units and regression coverage.
+
 ## Sphere preparation
 
 `prepareSphere(argv, ports)` from `./preparation` (also `./node`), and the `foss-earth-prepare-panorama` command, prepare a sphere from a local file. They take local-file arguments, authored or GPano pose and a mandatory credit. They write dated output under `build/prepared-scenes`: preview, whole and tiled files, plus fragment and provenance outputs. Normalization, source eligibility, sampling, cube and tile rendering and the encoders are public APIs of the owning libraries. Preparation uses no network.

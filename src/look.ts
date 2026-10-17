@@ -1,6 +1,6 @@
 /** Retained sphere look model, ticked by the host frame only. */
-import type { TouchPair } from "./cameraTarget.js";
-import { anchorSphereCamera, sphereRay, type SpherePoint, type SpherePoseLimits, type SphereViewport } from "./sphereCamera.js";
+import type { ImageCameraAnchor, TouchPair } from "./cameraTarget.js";
+import { anchorSphereCamera, projectSphereRay, sphereRay, type SpherePoint, type SpherePoseLimits, type SphereViewport } from "./sphereCamera.js";
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
 export interface LookState {
@@ -10,9 +10,9 @@ export interface LookState {
 }
 
 export interface LookSettings {
-  /** deg per CSS px: `scene.panorama.dragSensitivity`. */
+  /** deg per CSS px without a measured viewport: `scene.panorama.dragSensitivity`. */
   dragSensitivity: number;
-  /** deg per CSS px of a trackpad swipe's scroll: `scene.panorama.swipeSensitivity`. */
+  /** deg per CSS px of a trackpad swipe without a measured viewport: `scene.panorama.swipeSensitivity`. */
   swipeSensitivity: number;
   /** deg/s for keys and a full stick: `lookRate`. */
   lookRate: number;
@@ -49,14 +49,17 @@ export function zoomFov(fovDeg: number, amount: number): number {
 export interface LookModel {
   get(): LookState;
   set(state: LookState): void;
-  /** A drag of the image by (dx, dy) CSS px over `dtMs`. Its speed glides on only after the release. */
-  drag(dx: number, dy: number, dtMs: number): void;
+  /** The current gesture's actual image point, projected into the measured view. */
+  anchor(): ImageCameraAnchor | null;
+  subscribeAnchors(changed: () => void): () => void;
+  /** A drag from `from` by (dx, dy) CSS px over `dtMs`. Its speed glides on only after the release. */
+  drag(dx: number, dy: number, dtMs: number, from?: SpherePoint | null): void;
   /** The drag ends, `stillMs` after its last move: a drag held still before the release has no glide. */
   release(stillMs?: number): void;
   /** Wheel deltaY in CSS px; negative (wheel up) narrows. `at` anchors the ray there. */
   wheel(deltaPx: number, at?: SpherePoint | null): void;
-  /** A trackpad swipe's scroll deltas, CSS px: it moves the image as a drag the other way does. */
-  swipe(deltaX: number, deltaY: number): void;
+  /** A trackpad swipe's scroll deltas, CSS px. A continuing gesture keeps its starting image point, regardless of `at`. */
+  swipe(deltaX: number, deltaY: number, at?: SpherePoint | null, continuing?: boolean): void;
   /** Zooms by a pinch's scale change as a natural logarithm; positive (fingers apart) narrows. `at` anchors the ray there. */
   pinchBy(logScale: number, at?: SpherePoint | null): void;
   /** Pinch from one finger separation to another. */
@@ -73,19 +76,31 @@ export interface LookModel {
 
 export function createLookModel(initial: LookState, settings: () => LookSettings, onChange: (state: LookState) => void, viewport?: () => SphereViewport | null): LookModel {
   let state = clampLook(initial, settings());
+  let grab: { kind: "drag" | "pinch" | "swipe"; ray: ReturnType<typeof sphereRay>; at: SpherePoint; width: number; height: number } | null = null;
+  let marker: { ray: ReturnType<typeof sphereRay>; grab: boolean; zoom: boolean; held: boolean } | null = null;
+  const anchorListeners = new Set<() => void>();
+  const notifyAnchors = (): void => { for (const listener of anchorListeners) listener(); };
   const readViewport = (): SphereViewport | null => {
     const view = viewport?.() ?? null;
     return view && view.width > 0 && view.height > 0 ? view : null;
   };
   const limitsOf = (current: LookSettings): SpherePoseLimits => ({ fovDeg: current.fovRangeDeg, pitchDeg: current.pitchRangeDeg });
   /** Zoom by `amount` on tan(fov/2). A measured view keeps the ray under `at` on the way to `to`. */
-  const anchored = (next: LookState, amount: number, at: SpherePoint | null, to: SpherePoint | null): LookState => {
-    const requested = zoomFov(next.verticalFovDeg, amount);
+  const anchored = (next: LookState, amount: number, at: SpherePoint | null, to: SpherePoint | null, kind?: "drag" | "pinch" | "swipe"): LookState => {
+    const requested = amount === 0 ? next.verticalFovDeg : zoomFov(next.verticalFovDeg, amount);
     const view = readViewport();
-    if (!view) return { ...next, verticalFovDeg: requested };
+    if (!view) { grab = null; marker = null; return { ...next, verticalFovDeg: requested }; }
     const from = at ?? { x: view.width / 2, y: view.height / 2 };
-    const ray = sphereRay(next, view, from);
-    return anchorSphereCamera(next, view, ray, to ?? from, requested, limitsOf(settings()), from);
+    const holds = kind !== undefined;
+    const retained = holds && grab?.kind === kind && grab.at.x === from.x && grab.at.y === from.y && grab.width === view.width && grab.height === view.height ? grab : null;
+    const ray = retained?.ray ?? sphereRay(next, view, from);
+    // At a pitch limit the finger can travel beyond the grabbed point. Start
+    // the solver at that point's actual projection and keep holding its ray.
+    const source = retained ? projectSphereRay(next, view, ray) ?? from : from;
+    const destination = to ?? from;
+    grab = holds ? { kind, ray, at: destination, width: view.width, height: view.height } : null;
+    marker = { ray, grab: kind !== undefined, zoom: kind === undefined || kind === "pinch", held: true };
+    return anchorSphereCamera(next, view, ray, destination, requested, limitsOf(settings()), source);
   };
   let velocity = { heading: 0, pitch: 0 };
   let rates = { lookX: 0, lookY: 0, zoom: 0 };
@@ -94,34 +109,74 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
   const apply = (next: LookState): void => {
     state = clampLook(next, settings());
     onChange(state);
+    notifyAnchors();
   };
   return {
     get: () => state,
+    anchor() {
+      const view = readViewport();
+      const point = marker && view ? projectSphereRay(state, view, marker.ray) : null;
+      return point && marker ? { ...point, grab: marker.grab, zoom: marker.zoom, held: marker.held } : null;
+    },
+    subscribeAnchors(changed) {
+      anchorListeners.add(changed);
+      return () => { anchorListeners.delete(changed); };
+    },
     set(next) {
       velocity = { heading: 0, pitch: 0 };
+      grab = null;
+      marker = null;
       apply(next);
     },
-    drag(dx, dy, dtMs) {
-      const gain = settings().dragSensitivity;
-      const heading = -dx * gain;
-      const pitch = dy * gain;
+    drag(dx, dy, dtMs, from) {
+      if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+      const view = readViewport();
+      let next: LookState;
+      let heading: number, pitch: number;
+      if (view) {
+        const at = from ?? { x: view.width / 2, y: view.height / 2 };
+        next = anchored(state, 0, at, { x: at.x + dx, y: at.y + dy }, "drag");
+        heading = ((next.headingDeg - state.headingDeg + 540) % 360) - 180;
+        pitch = next.pitchDeg - state.pitchDeg;
+      } else {
+        grab = null;
+        marker = null;
+        const gain = settings().dragSensitivity;
+        heading = -dx * gain;
+        pitch = dy * gain;
+        next = { ...state, headingDeg: state.headingDeg + heading, pitchDeg: state.pitchDeg + pitch };
+      }
       held = true;
       if (dtMs > 0) velocity = { heading: (heading / dtMs) * 1000, pitch: (pitch / dtMs) * 1000 };
-      apply({ ...state, headingDeg: state.headingDeg + heading, pitchDeg: state.pitchDeg + pitch });
+      apply(next);
     },
     release(stillMs = 0) {
       held = false;
+      grab = null;
       const current = settings();
       if (current.reducedMotion || current.inertiaHalfLifeMs <= 0 || stillMs > GLIDE_RELEASE_WINDOW_MS) velocity = { heading: 0, pitch: 0 };
+      if (marker) marker = velocity.heading || velocity.pitch ? { ...marker, held: false } : null;
+      notifyAnchors();
     },
     wheel(deltaPx, at) {
       apply(anchored(state, (-deltaPx / WHEEL_NOTCH_PX) * settings().zoomPerNotch, at ?? null, null));
     },
-    swipe(deltaX, deltaY) {
+    swipe(deltaX, deltaY, at, continuing = false) {
+      if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return;
       // The OS applies the scroll direction the person chose, and momentum after the fingers lift.
-      const gain = settings().swipeSensitivity;
       velocity = { heading: 0, pitch: 0 };
-      apply({ ...state, headingDeg: state.headingDeg + deltaX * gain, pitchDeg: state.pitchDeg - deltaY * gain });
+      const view = readViewport();
+      if (view) {
+        const retained = continuing && grab?.kind === "swipe" && grab.width === view.width && grab.height === view.height ? grab : null;
+        const from = retained?.at ?? at ?? { x: view.width / 2, y: view.height / 2 };
+        if (!retained) grab = null;
+        apply(anchored(state, 0, from, { x: from.x - deltaX, y: from.y - deltaY }, "swipe"));
+      } else {
+        grab = null;
+        marker = null;
+        const gain = settings().swipeSensitivity;
+        apply({ ...state, headingDeg: state.headingDeg + deltaX * gain, pitchDeg: state.pitchDeg - deltaY * gain });
+      }
     },
     pinch(fromPx, toPx) {
       if (!(fromPx > 0 && toPx > 0)) return;
@@ -129,7 +184,9 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
     },
     touchPinch(from, to) {
       if (!(from.separation > 0 && to.separation > 0)) return;
-      apply(anchored(state, Math.log(to.separation / from.separation) * settings().pinchGain, from.mid, to.mid));
+      held = true;
+      velocity = { heading: 0, pitch: 0 };
+      apply(anchored(state, Math.log(to.separation / from.separation) * settings().pinchGain, from.mid, to.mid, "pinch"));
     },
     pinchBy(logScale, at) {
       if (!Number.isFinite(logScale)) return;
@@ -137,7 +194,9 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
     },
     setRates(next) {
       rates = next;
+      if (next.lookX || next.lookY || next.zoom) grab = null;
       if (next.lookX || next.lookY) velocity = { heading: 0, pitch: 0 };
+      if (next.lookX || next.lookY) { marker = null; notifyAnchors(); }
     },
     step(dtMs) {
       const current = settings();
@@ -161,12 +220,17 @@ export function createLookModel(initial: LookState, settings: () => LookSettings
         }
       }
       if (rates.zoom) next = anchored(next, rates.zoom * current.zoomRate * dt, null, null);
+      if (marker && !marker.held && !velocity.heading && !velocity.pitch) marker = null;
       if (next !== state) apply(next);
+      else notifyAnchors();
       return this.moving();
     },
     moving: () => Boolean(rates.lookX || rates.lookY || rates.zoom || (!held && (velocity.heading || velocity.pitch))),
     cancelInertia() {
       velocity = { heading: 0, pitch: 0 };
+      grab = null;
+      marker = null;
+      notifyAnchors();
     },
   };
 }

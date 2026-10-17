@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { attachLookInput } from "../src/browserInput.js";
 import { createLookModel, zoomFov, type LookSettings } from "../src/index.js";
+import { projectSphereRay, sphereRay, type SpherePoint } from "../src/sphereCamera.js";
 import { controlTakesKey } from "@felipegalind0/gamepad-tools/browser";
 import { createWheelGestureClassifier as createEngineWheelGestureClassifier } from "@foss-earth/engine/core";
 const createWheelGestureClassifier: Parameters<typeof attachLookInput>[0]["createWheelGestureClassifier"] = options =>
@@ -93,6 +94,99 @@ describe("sphere wheel input", () => {
     canvas.dispatchEvent(wheel({ deltaY: -100 }));
     expect(model.get().verticalFovDeg).toBeCloseTo(zoomFov(60, 0.1));
     expect(model.get().headingDeg).toBe(90);
+    input.detach();
+  });
+});
+
+describe("measured sphere pan input", () => {
+  const viewport = { width: 800, height: 600 };
+  const offset = { x: 130, y: 75 };
+  const attach = () => {
+    const canvas = document.createElement("canvas");
+    canvas.setPointerCapture = vi.fn();
+    canvas.releasePointerCapture = vi.fn();
+    document.body.append(canvas);
+    const settings = { ...SETTINGS, fovRangeDeg: { min: 10, max: 150 } };
+    const model = createLookModel({ headingDeg: 0.1, pitchDeg: 8, verticalFovDeg: 10 }, () => settings, () => {}, () => viewport);
+    const input = attachLookInput({
+      canvas, model, window, controlTakesKey, createWheelGestureClassifier,
+      localPoint: (x, y) => ({ x: x - offset.x, y: y - offset.y }),
+      onExit: vi.fn(), onUserInput: vi.fn(), requestFrame: vi.fn(), inputMode: () => "trackpad",
+    });
+    return { canvas, model, input };
+  };
+  const pointer = (canvas: HTMLCanvasElement, type: string, id: number, at: SpherePoint, time: number) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.assign(event, { pointerId: id, pointerType: "touch", button: 0, clientX: at.x + offset.x, clientY: at.y + offset.y });
+    Object.defineProperty(event, "timeStamp", { value: time });
+    canvas.dispatchEvent(event);
+  };
+  const expectRayAt = (model: ReturnType<typeof createLookModel>, ray: ReturnType<typeof sphereRay>, point: SpherePoint) => {
+    const projected = projectSphereRay(model.get(), viewport, ray);
+    expect(projected).not.toBeNull();
+    expect(Math.hypot(projected!.x - point.x, projected!.y - point.y)).toBeLessThan(0.25);
+  };
+
+  it("passes a finger's surface-local source point and does not drift while it is held", () => {
+    const { canvas, model, input } = attach();
+    const from = { x: 580, y: 260 }, to = { x: 607, y: 247 };
+    const ray = sphereRay(model.get(), viewport, from);
+    pointer(canvas, "pointerdown", 1, from, 100);
+    pointer(canvas, "pointermove", 1, to, 116);
+    expectRayAt(model, ray, to);
+    model.step(100);
+    expect(model.moving()).toBe(false);
+    expectRayAt(model, ray, to);
+    pointer(canvas, "pointerup", 1, to, 216);
+    expect(model.step(100)).toBe(false);
+    expectRayAt(model, ray, to);
+    input.detach();
+  });
+
+  it("passes a trackpad pan's surface-local pointer and leaves momentum to the OS", () => {
+    const { canvas, model, input } = attach();
+    const at = { x: 580, y: 250 };
+    const ray = sphereRay(model.get(), viewport, at);
+    canvas.dispatchEvent(new WheelEvent("wheel", {
+      bubbles: true, cancelable: true, deltaX: 26, deltaY: -14,
+      clientX: at.x + offset.x, clientY: at.y + offset.y,
+    }));
+    const to = { x: at.x - 26, y: at.y + 14 };
+    expectRayAt(model, ray, to);
+    expect(model.step(100)).toBe(false);
+    expectRayAt(model, ray, to);
+    input.detach();
+  });
+
+  it("reanchors a one-finger drag through a two-touch midpoint pan and back to one finger", () => {
+    const { canvas, model, input } = attach();
+    const first = { x: 450, y: 300 }, firstMoved = { x: 470, y: 290 };
+    const firstRay = sphereRay(model.get(), viewport, first);
+    pointer(canvas, "pointerdown", 1, first, 100);
+    pointer(canvas, "pointermove", 1, firstMoved, 116);
+    expectRayAt(model, firstRay, firstMoved);
+
+    const beforeSecond = model.get();
+    pointer(canvas, "pointerdown", 2, { x: 550, y: 290 }, 120);
+    expect(model.get()).toEqual(beforeSecond);
+    const midpointRay = sphereRay(model.get(), viewport, { x: 510, y: 290 });
+    pointer(canvas, "pointermove", 1, { x: 490, y: 300 }, 132);
+    pointer(canvas, "pointermove", 2, { x: 570, y: 300 }, 136);
+    expectRayAt(model, midpointRay, { x: 530, y: 300 });
+    expect(model.get().verticalFovDeg).toBeCloseTo(beforeSecond.verticalFovDeg, 6);
+
+    const beforeLift = model.get();
+    pointer(canvas, "pointerup", 2, { x: 570, y: 300 }, 140);
+    expect(model.get()).toEqual(beforeLift);
+    const remainingRay = sphereRay(model.get(), viewport, { x: 490, y: 300 });
+    const remainingTo = { x: 503, y: 294 };
+    pointer(canvas, "pointermove", 1, remainingTo, 152);
+    expectRayAt(model, remainingRay, remainingTo);
+    model.step(100);
+    expect(model.moving()).toBe(false);
+    expectRayAt(model, remainingRay, remainingTo);
+    pointer(canvas, "pointerup", 1, remainingTo, 252);
+    expect(model.step(100)).toBe(false);
     input.detach();
   });
 });

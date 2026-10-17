@@ -23,15 +23,27 @@ export interface TouchPair {
   readonly separation: number;
 }
 
+/** An image gesture's actual anchor, projected into surface-local CSS pixels. */
+export interface ImageCameraAnchor extends SurfacePoint {
+  readonly grab: boolean;
+  readonly zoom: boolean;
+  /** False while a released grab is only gliding. */
+  readonly held: boolean;
+}
+
 export interface ImageCameraTarget {
-  /** A drag of the image by (dx, dy) CSS px over `dtMs`. */
-  drag(dx: number, dy: number, dtMs: number): void;
+  /** The projected image point the current gesture holds, when supported. */
+  anchor?(): ImageCameraAnchor | null;
+  /** Camera motion and gesture changes, including the end of a glide. */
+  subscribeAnchors?(changed: () => void): () => void;
+  /** A drag from `from` by (dx, dy) CSS px over `dtMs`. */
+  drag(dx: number, dy: number, dtMs: number, from?: SurfacePoint | null): void;
   /** The drag ends, `stillMs` after its last move. */
   release(stillMs?: number): void;
   /** Wheel deltaY in CSS px at a point; negative (wheel up) magnifies. */
   wheel(deltaPx: number, at?: SurfacePoint | null): void;
-  /** A trackpad swipe's scroll deltas, CSS px, already in the direction the person chose. */
-  swipe(deltaX: number, deltaY: number): void;
+  /** Scroll deltas in the person's chosen direction. Continuing swipes keep the image point where the gesture began. */
+  swipe(deltaX: number, deltaY: number, at?: SurfacePoint | null, continuing?: boolean): void;
   /** A pinch's scale change as a natural logarithm at a point; positive (fingers apart) magnifies. */
   pinchBy(logScale: number, at?: SurfacePoint | null): void;
   /** Two touches moved: separation and midpoint motion in one update. */
@@ -128,17 +140,19 @@ export interface SphereCameraTargetPorts {
 }
 
 /**
- * The sphere camera as an input target. Zoom and pinch keep the common-space
- * ray under the pointer; drag, swipe and held rates use the live look's
- * heading and pitch. Both read the measured view, not the whole canvas.
+ * The sphere camera as an input target. Drag, swipe, zoom and pinch keep the
+ * common-space ray under the gesture using the measured view. Held rates
+ * change the live look's heading and pitch.
  */
 export function createSphereCameraTarget(ports: SphereCameraTargetPorts): ImageCameraTarget {
   let model: LookModel | null = null;
+  const anchorListeners = new Set<() => void>();
   const ensure = (): LookModel | null => {
     const current = ports.get();
     if (!current) return null;
     if (!model) {
       model = createLookModel(current, ports.settings, next => ports.set(next), () => ports.viewport());
+      model.subscribeAnchors(() => { for (const listener of anchorListeners) listener(); });
       return model;
     }
     const held = model.get();
@@ -146,10 +160,15 @@ export function createSphereCameraTarget(ports: SphereCameraTargetPorts): ImageC
     return model;
   };
   return {
-    drag(dx, dy, dt) { ensure()?.drag(dx, dy, dt); },
+    anchor: () => ensure()?.anchor() ?? null,
+    subscribeAnchors(changed) {
+      anchorListeners.add(changed);
+      return () => { anchorListeners.delete(changed); };
+    },
+    drag(dx, dy, dt, from) { ensure()?.drag(dx, dy, dt, from); },
     release(still) { model?.release(still); },
     wheel(delta, at) { ensure()?.wheel(delta, at); },
-    swipe(dx, dy) { ensure()?.swipe(dx, dy); },
+    swipe(dx, dy, at, continuing) { ensure()?.swipe(dx, dy, at, continuing); },
     pinchBy(log, at) { ensure()?.pinchBy(log, at); },
     touchPinch(from, to) { ensure()?.touchPinch(from, to); },
     setRates(rates) { ensure()?.setRates(rates); },

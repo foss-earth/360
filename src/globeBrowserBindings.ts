@@ -1,8 +1,8 @@
 /** Browser/input realm binding extracted from App/sceneWorld; never attaches on import. */
 import { createWheelGestureClassifier, type NavigationLease } from "@foss-earth/engine";
-import { isSafariGestureSupported, watchWheelGestures } from "@foss-earth/engine/browser";
+import { attachNavigationAnchorMarkers, isSafariGestureSupported, watchWheelGestures } from "@foss-earth/engine/browser";
 import type { GlobeRuntime } from "@foss-earth/engine/babylon";
-import { attachLookInput } from "./browserInput.js";
+import { attachLookInput, type ImageAnchorMarkers, type LookInputOptions } from "./browserInput.js";
 import type { ViewerHeldPress, ViewerHeldTouch, ViewerInputPorts, ViewerNavigationLease } from "./viewer.js";
 
 const TOUCH_EVENTS = ["touchstart", "touchmove", "touchend", "touchcancel"] as const;
@@ -11,6 +11,30 @@ const attemptCleanup = (actions: readonly (() => void)[], message: string): void
   for (const action of actions) { try { action(); } catch (error) { errors.push(error); } }
   if (errors.length) throw new AggregateError(errors, message);
 };
+
+/** Map-style markers for image anchors, converted from the measured surface's CSS pixels. */
+export function createImageAnchorMarkers(canvas: HTMLElement,
+  surfaceRect?: () => { left: number; top: number; width: number; height: number } | null,
+): ImageAnchorMarkers {
+  const markers = attachNavigationAnchorMarkers(canvas);
+  return {
+    show(anchor) {
+      if (!anchor) { markers.show([]); return; }
+      const rect = surfaceRect ? surfaceRect() : canvas.getBoundingClientRect();
+      if (!rect || !(rect.width > 0 && rect.height > 0)
+        || !Number.isFinite(anchor.x) || !Number.isFinite(anchor.y)
+        || anchor.x < 0 || anchor.y < 0 || anchor.x > rect.width || anchor.y > rect.height) {
+        markers.show([]);
+        return;
+      }
+      markers.show([{ x: rect.left + anchor.x, y: rect.top + anchor.y,
+        grab: anchor.grab, zoom: anchor.zoom, held: anchor.held, zoomHeld: anchor.held,
+        orbit: false, pinned: false, occluded: false }]);
+    },
+    destroy: () => markers.destroy(),
+  };
+}
+
 export function createGlobeViewerInput(
   runtime: Pick<GlobeRuntime, "getInputMode" | "setNavigationIntentHandler">, canvas: HTMLCanvasElement,
   engineLeaseFor: (lease: ViewerNavigationLease) => NavigationLease, ports: {
@@ -18,6 +42,8 @@ export function createGlobeViewerInput(
     abortReason(): unknown; signal?: AbortSignal; onRetirementError?(error: unknown): void;
     /** Client rectangle of the measured view. Pointers convert into it instead of the whole canvas. */
     surfaceRect?: () => { left: number; top: number; width: number; height: number } | null;
+    /** Optional visible image anchors; the host owns its setting and marker renderer. */
+    anchorMarkers?: LookInputOptions["anchorMarkers"];
   },
 ) {
   let disposed = false;
@@ -40,6 +66,7 @@ export function createGlobeViewerInput(
         inputMode: () => { const mode = runtime.getInputMode(); return mode === "touch" ? "auto" : mode; },
         safariGestures: isSafariGestureSupported({ userAgent: hostWindow.navigator.userAgent, hasGestureEvent: "GestureEvent" in hostWindow }),
         precedingWheelMs: wheels.lastEventMs(),
+        anchorMarkers: ports.anchorMarkers,
         localPoint: ports.surfaceRect ? (clientX, clientY) => {
           const rect = ports.surfaceRect?.();
           if (!rect || !(rect.width > 0 && rect.height > 0)) return null;

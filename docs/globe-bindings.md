@@ -38,6 +38,22 @@ Every attached listener is released on abort/disposal; partial attachment and
 throwing cleanup remain observable. There is no ambient canvas/window/session on
 import.
 
+Image anchor markers are optional and off by default in **360 image settings →
+Looking → Show anchors** (`scene.panorama.showAnchors`). The browser input
+`anchorMarkers` port accepts an `enabled` reader, a `create(element)` renderer
+factory and an optional settings subscription for immediate changes. Pass
+`createImageAnchorMarkers(element, surfaceRect?)` from the same browser entry
+to reuse the map's grab arrows, zoom reticle and gray glide state. Its positions
+are local CSS pixels in the measured surface; the helper converts them to client
+pixels and hides points outside that surface. The same factory works inside a
+preview iframe using its own document.
+
+A trackpad pan keeps the sphere point where the gesture began through the
+scroll stream and its operating-system momentum. Cursor movement does not
+choose a new point until a fresh gesture begins after the idle gap.
+The [gesture guide](gesture-anchors.md) records the camera invariants, timing,
+viewport units and regression coverage.
+
 `createImageViewer` in `@foss-earth/sphere-image/viewer` returns additive
 `SettledPublishedImageViewer`, with `whenSettled(): Promise<void>`; it accepts a
 host `signal` and optional `onRetirementError`. `createViewerResources` in

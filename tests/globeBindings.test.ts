@@ -2,11 +2,58 @@
 import { expect, it, vi } from "vitest";
 import { createGlobeViewerFrameBinding, createGlobeViewerNavigation, createGlobeViewerProjection, createViewerSceneDescription,
   type GlobeViewerRuntime, type ViewerSceneDescriptionPorts } from "../src/globeBindings.js";
-import { createGlobeViewerInput } from "../src/globeBrowserBindings.js";
+import { createGlobeViewerInput, createImageAnchorMarkers } from "../src/globeBrowserBindings.js";
+import { SHOW_IMAGE_ANCHORS_ID, SPHERE_SETTINGS_TAB, VIEWER_PARAMETERS } from "../src/settings.js";
 import { image, fixture } from "./fixtures/viewer.js";
 import type { ViewerNavigationLease } from "../src/viewer.js";
 import { createBuiltInRepresentations } from "../src/catalogue.js";
 const description: ViewerSceneDescriptionPorts = { representations: createBuiltInRepresentations(() => ({ tileMemoryBytes: 4096, responseBytes: 4096, requests: 1, waiting: 1, uploadOutstandingBytes: 4096 })), tileMemoryBytes: () => 4096, maxTextureSide: () => 4096 };
+it("keeps image anchors off by default in 360 image settings, under Looking", () => {
+  expect(VIEWER_PARAMETERS.find(parameter => parameter.id === SHOW_IMAGE_ANCHORS_ID)).toMatchObject({
+    label: "Show anchors", kind: "boolean", default: false, appliesLive: true,
+    home: { tab: SPHERE_SETTINGS_TAB, section: "looking", level: "main" },
+  });
+});
+it("draws the map's grab and zoom markers at the measured image surface's client point", () => {
+  const host = document.createElement("div"), surface = document.createElement("div");
+  host.append(surface); document.body.append(host);
+  const markers = createImageAnchorMarkers(surface, () => ({ left: 100, top: 40, width: 800, height: 600 }));
+  const root = host.querySelector<HTMLElement>("[data-foss-earth-navigation-anchors]")!;
+  root.getBoundingClientRect = () => ({ left: 10, top: 20 }) as DOMRect;
+  markers.show({ x: 200, y: 160, grab: true, zoom: true, held: true });
+  const svg = root.querySelector("svg")!;
+  expect(root.hidden).toBe(false);
+  expect(svg.style.transform).toBe("translate(268px, 158px)");
+  expect(svg.getAttribute("aria-label")).toBe("Grabbed point, where zoom acts");
+  expect(svg.style.pointerEvents).toBe("none");
+  markers.show({ x: 210, y: 170, grab: true, zoom: false, held: false });
+  expect(svg.getAttribute("aria-label")).toBe("Grabbed point, gliding");
+  expect(svg.style.color).toBe("var(--foss-earth-navigation-anchor-coast-color,#a3a3a3)");
+  markers.destroy(); expect(host.querySelector("[data-foss-earth-navigation-anchors]")).toBeNull(); host.remove();
+});
+it("hides image markers outside the surface and uses an iframe canvas's own document and origin", () => {
+  const frame = document.createElement("iframe"); document.body.append(frame);
+  const doc = frame.contentDocument!, canvas = doc.createElement("canvas"); doc.body.append(canvas);
+  canvas.getBoundingClientRect = () => ({ left: 8, top: 12, width: 100, height: 60 }) as DOMRect;
+  const markers = createImageAnchorMarkers(canvas), root = doc.querySelector<HTMLElement>("[data-foss-earth-navigation-anchors]")!;
+  expect(document.querySelector("[data-foss-earth-navigation-anchors]")).toBeNull();
+  markers.show({ x: 20, y: 30, grab: false, zoom: true, held: true });
+  expect(root.hidden).toBe(false);
+  expect(root.querySelector<SVGSVGElement>("svg")!.style.transform).toBe("translate(6px, 20px)");
+  for (const point of [{ x: -1, y: 30 }, { x: 101, y: 30 }, { x: 20, y: 61 }, { x: NaN, y: 30 }]) {
+    markers.show({ ...point, grab: true, zoom: false, held: true }); expect(root.hidden).toBe(true);
+  }
+  markers.show(null); expect(root.hidden).toBe(true);
+  markers.destroy(); frame.remove();
+});
+it("hides image markers when a measured surface disappears instead of using the full canvas", () => {
+  const canvas = document.createElement("canvas"); document.body.append(canvas);
+  canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 800, height: 600 }) as DOMRect;
+  const markers = createImageAnchorMarkers(canvas, () => null);
+  markers.show({ x: 200, y: 160, grab: true, zoom: false, held: true });
+  expect(document.querySelector<HTMLElement>("[data-foss-earth-navigation-anchors]")!.hidden).toBe(true);
+  markers.destroy(); canvas.remove();
+});
 it("keeps the actual native lease and refuses another host's lease while returning original focus", () => {
   const f = fixture(), focus = {}, native = { ...f.lease, focusReturn: focus }, acquire = vi.fn(() => ({ ok: true, lease: native })), place = vi.fn(), glide = vi.fn(), returnFocus = vi.fn();
   const runtime = { acquireNavigation: acquire, placeNavigationCamera: place, restoreNavigationSnapshot: vi.fn(), glideNavigationCamera: glide,
